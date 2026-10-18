@@ -1,0 +1,25 @@
+﻿'=====================================================================
+'  CODE FACULTATIF — à coller dans le module de la feuille Suivi_Paiements
+'  (Alt+F11 > double-clic sur « Suivi_Paiements » dans la liste à gauche)
+'
+'  Effet : quand vous choisissez PAYE ou IMPAYE dans la liste déroulante
+'  de la colonne J, la date de paiement (colonne K) se remplit ou s'efface
+'  automatiquement.
+'=====================================================================
+Option Explicit
+
+Private Sub Worksheet_Change(ByVal Target As Range)
+    Dim c As Range
+    If Intersect(Target, Me.Columns(10)) Is Nothing Then Exit Sub
+    Application.EnableEvents = False
+    For Each c In Intersect(Target, Me.Columns(10)).Cells
+        If c.Row >= 2 Then
+            If UCase$(CStr(c.Value)) = "PAYE" Then
+                If Me.Cells(c.Row, 11).Value = "" Then Me.Cells(c.Row, 11).Value = Date
+            Else
+                Me.Cells(c.Row, 11).ClearContents
+            End If
+        End If
+    Next c
+    Application.EnableEvents = True
+End Sub
