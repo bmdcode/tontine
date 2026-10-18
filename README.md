@@ -104,11 +104,18 @@ Requiert PHP 7.4 ou plus.
 
 ---
 
-## 5. Version HTML (GitHub Pages)
+## 5. Version HTML (GitHub Pages) — application installable
+
+> **v3 (version HTML)** : tarifs libres (100 000 F à 5 000 000 F ou tout autre montant divisible par 4, lot = 10 × le tarif), parts de 25, 50 ou 75 % dans un seul groupe, retards réglables après la clôture d'un mois, tirage au sort avec places imposées, nom et mois de chaque tour (impression du tableau), installation sur téléphone et fonctionnement sans internet. 
+>
+> **v4 (version HTML)** : formules « 75 % + 25 % » (2 groupes) et « 50 % + 25 % + 25 % » (3 groupes) ; suivi individuel de chaque membre (parts, taux de participation, versé / dû, retards, lots) avec relevé imprimable ; numérotation des groupes réglable (ex. à partir de G109) et numéro modifiable ; affiches PNG pour statut WhatsApp, publication Facebook ou format carré (tableau d'un groupe ou grille des tarifs, avec les responsables) à télécharger ou partager ; fiche de remise du lot à signer, en deux exemplaires, avec le montant en lettres.
+>
+> Les versions Python, PHP et Excel n'ont pas encore les ajouts v3 et v4.
 
 Le dossier `docs/` contient une application complète en HTML + JavaScript, sans serveur ni dépendance externe : `index.html`, `css/style.css`, `js/core.js` (logique métier, identique aux autres versions) et `js/app.js` (interface).
 
-- **Utilisation locale** : double-cliquez sur `docs/index.html`.
+- **Installer sur le téléphone** : ouvrez le lien en ligne, puis *Paramètres > Installer l'application* (Android : menu ⋮ → « Installer l'application » ; iPhone : Partager → « Sur l'écran d'accueil »). L'application a alors son icône et marche hors connexion.
+- **Utilisation locale** : double-cliquez sur `docs/index.html` (l'installation n'est possible que depuis le site en ligne).
 - **En ligne** : sur GitHub, *Settings > Pages > Build and deployment*, source **Deploy from a branch**, branche `main`, dossier **/docs**, puis *Save*. Le lien apparaît après une minute.
 
 Les données sont enregistrées **dans le navigateur de l'appareil utilisé** (localStorage), jamais sur GitHub. Chaque téléphone ou ordinateur a donc ses propres données :

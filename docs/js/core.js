@@ -10,13 +10,35 @@
 
   var NB_POSITIONS = 10;   // strictement 10 tours par groupe
   var QUARTS_CASE = 4;     // une case pleine = 4 quarts = 100 %
-  var VERSION_DONNEES = 2;
+  var VERSION_DONNEES = 3;
 
+  /* cle : identifiant ; parts : quarts de chaque part (1 = 25 %), chacune dans un groupe différent */
   var FORMULES = [
-    { quarts: 4, libelle: 'Global — 1 part à 100 % (1 groupe)' },
-    { quarts: 2, libelle: '2 parts — 50 % dans 2 groupes' },
-    { quarts: 1, libelle: '4 parts — 25 % dans 4 groupes' }
+    { cle: 'G100', parts: [4], libelle: 'Part entière — 100 % dans 1 groupe' },
+    { cle: 'S75', parts: [3], libelle: '75 % dans 1 groupe' },
+    { cle: 'S50', parts: [2], libelle: '50 % dans 1 groupe' },
+    { cle: 'S25', parts: [1], libelle: '25 % dans 1 groupe' },
+    { cle: 'D50', parts: [2, 2], libelle: '2 parts — 50 % dans 2 groupes' },
+    { cle: 'Q25', parts: [1, 1, 1, 1], libelle: '4 parts — 25 % dans 4 groupes' },
+    { cle: 'M75_25', parts: [3, 1], libelle: '2 parts — 75 % + 25 % dans 2 groupes' },
+    { cle: 'M50_25_25', parts: [2, 1, 1], libelle: '3 parts — 50 % + 25 % + 25 % dans 3 groupes' }
   ];
+  FORMULES.forEach(function (f) {
+    f.groupes = f.parts.length;
+    f.total = f.parts.reduce(function (a, b) { return a + b; }, 0);
+    f.quarts = f.parts[0];
+  });
+  function formule(cle) {
+    if (typeof cle === 'number') {                // compatibilité : 4 → G100, 2 → D50, 1 → Q25
+      cle = { 4: 'G100', 2: 'D50', 1: 'Q25', 3: 'S75' }[cle];
+    }
+    return FORMULES.find(function (f) { return f.cle === cle; }) || null;
+  }
+
+  /* Grille des tarifs : mise mensuelle d'une part entière (le lot vaut 10 fois la mise) */
+  var TARIFS_DEFAUT = [100000, 200000, 300000, 400000, 500000, 600000, 700000, 800000, 900000,
+                       1000000, 2000000, 3000000, 4000000, 5000000];
+  var MOIS = ['Janvier', 'Février', 'Mars', 'Avril', 'Mai', 'Juin', 'Juillet', 'Août', 'Septembre', 'Octobre', 'Novembre', 'Décembre'];
 
   var MODES = {
     ESPECES: 'Espèces', WAVE: 'Wave', ORANGE_MONEY: 'Orange Money', FREE_MONEY: 'Free Money',
@@ -54,7 +76,7 @@
   function etatVide() {
     return {
       version: VERSION_DONNEES,
-      parametres: { mise_reference: 100000, nom_tontine: 'Ma Tontine' },
+      parametres: { mise_reference: 100000, nom_tontine: 'Ma Tontine', tarifs: TARIFS_DEFAUT.slice() },
       seq: { membres: 0, groupes: 0, parts: 0, versements: 0, permutations: 0, remises: 0 },
       membres: [], groupes: [], parts: [], versements: [], permutations: [], remises: []
     };
@@ -67,6 +89,13 @@
     d.membres.forEach(function (m) {
       if (m.telephone2 === undefined) m.telephone2 = null;
       if (m.cni === undefined) m.cni = null;
+    });
+    if (!Array.isArray(d.parametres.tarifs) || !d.parametres.tarifs.length) d.parametres.tarifs = TARIFS_DEFAUT.slice();
+    if (!Array.isArray(d.parametres.responsables)) d.parametres.responsables = [];
+    if (d.parametres.prochain_groupe === undefined) d.parametres.prochain_groupe = null;
+    d.groupes.forEach(function (g) {
+      if (g.nom === undefined) g.nom = '';
+      if (g.mois_debut === undefined) g.mois_debut = g.date_debut ? String(g.date_debut).slice(0, 7) : null;
     });
     d.version = VERSION_DONNEES;
     return d;
@@ -109,6 +138,23 @@
     this.d.parametres.mise_reference = v;
     this._commit();
     return v;
+  };
+  Tontine.prototype.tarifs = function () {
+    var t = this.d.parametres.tarifs.slice();
+    this.d.groupes.forEach(function (g) { if (t.indexOf(g.mise_reference) < 0) t.push(g.mise_reference); });
+    return t.sort(function (a, b) { return a - b; });
+  };
+  /** liste : « 100000, 200000 » ou tableau de nombres ; chaque tarif doit être divisible par 4 */
+  Tontine.prototype.setTarifs = function (liste) {
+    var t = (Array.isArray(liste) ? liste : String(liste || '').split(/[;,\n]+/))
+      .map(function (x) { return parseInt(String(x).replace(/[\s.]/g, ''), 10); })
+      .filter(function (x) { return x > 0; });
+    if (!t.length) throw new TontineError('Indiquez au moins un tarif.');
+    var mauvais = t.filter(function (x) { return x % 4 !== 0; });
+    if (mauvais.length) throw new TontineError('Tarif non divisible par 4 (parts à 25 %) : ' + mauvais.join(', '));
+    this.d.parametres.tarifs = t.filter(function (x, i) { return t.indexOf(x) === i; }).sort(function (a, b) { return a - b; });
+    this._commit();
+    return this.d.parametres.tarifs;
   };
   Tontine.prototype.setNom = function (nom) {
     this.d.parametres.nom_tontine = String(nom || '').trim() || 'Ma Tontine';
@@ -194,24 +240,75 @@
   /* ---------- MODULE B : groupes ---------- */
   Tontine.prototype.groupe = function (id) { return this.d.groupes.find(function (g) { return g.id === id; }) || null; };
 
+  /** Code du prochain groupe : compteur réglable dans Paramètres (ex. 109 → G109, G110…) */
   Tontine.prototype._nouveauCode = function () {
-    var n = this.d.groupes.length + 1, codes = this.d.groupes.map(function (g) { return g.code; });
-    var code;
+    var codes = this.d.groupes.map(function (g) { return g.code; });
+    var n = this.d.parametres.prochain_groupe || this.d.groupes.length + 1, code;
     do { code = 'G' + String(n).padStart(3, '0'); n++; } while (codes.indexOf(code) >= 0);
+    if (this.d.parametres.prochain_groupe) this.d.parametres.prochain_groupe = n;
     return code;
   };
 
+  Tontine.prototype.prochainNumero = function () {
+    var codes = this.d.groupes.map(function (g) { return g.code; });
+    var n = this.d.parametres.prochain_groupe || this.d.groupes.length + 1;
+    while (codes.indexOf('G' + String(n).padStart(3, '0')) >= 0) n++;
+    return n;
+  };
+
+  Tontine.prototype.setProchainNumero = function (n) {
+    n = parseInt(n, 10);
+    if (!(n >= 1)) throw new TontineError('Le numéro du prochain groupe doit être un nombre positif.');
+    this.d.parametres.prochain_groupe = n;
+    this._commit();
+  };
+
+  /** Responsables affichés sur les affiches et les fiches : une ligne « Nom ; téléphone » par personne */
+  Tontine.prototype.setResponsables = function (texte) {
+    this.d.parametres.responsables = String(texte || '').split(/\n+/).map(function (l) {
+      var p = l.split(/[;:]|\s{2,}|\t/);
+      return { nom: (p[0] || '').trim(), tel: (p.slice(1).join(' ') || '').trim() };
+    }).filter(function (r) { return r.nom; });
+    this._commit();
+  };
+
   Tontine.prototype._insererGroupe = function (mise) {
-    var g = { id: this._id('groupes'), code: this._nouveauCode(), mise_reference: mise, tour_courant: 1,
-              statut: 'OUVERT', date_creation: aujourdhui(), date_debut: null };
+    var g = { id: this._id('groupes'), code: this._nouveauCode(), nom: '', mise_reference: mise, tour_courant: 1,
+              statut: 'OUVERT', date_creation: aujourdhui(), date_debut: null, mois_debut: null };
     this.d.groupes.push(g);
     return g.id;
   };
 
-  Tontine.prototype.creerGroupe = function () {
-    var id = this._insererGroupe(this.mise());
+  Tontine.prototype.creerGroupe = function (mise) {
+    mise = mise ? verifierMise(mise) : this.mise();
+    var id = this._insererGroupe(mise);
     this._commit();
     return id;
+  };
+
+  /** Nom affiché (ex. « Tontine Millions 10 mois ») et premier mois (AAAA-MM) du groupe */
+  Tontine.prototype.modifierGroupe = function (gid, info) {
+    var g = this.groupe(gid);
+    if (!g) throw new TontineError('Groupe introuvable.');
+    g.nom = String(info.nom || '').trim();
+    if (info.code !== undefined) {
+      var code = String(info.code || '').trim().toUpperCase();
+      if (!code) throw new TontineError('Le numéro du groupe ne peut pas être vide.');
+      if (/^\d+$/.test(code)) code = 'G' + code.padStart(3, '0');
+      if (this.d.groupes.some(function (x) { return x.id !== gid && x.code === code; })) throw new TontineError('Le numéro ' + code + ' est déjà pris.');
+      g.code = code;
+    }
+    var m = String(info.mois_debut || '').slice(0, 7);
+    if (m && !/^\d{4}-(0[1-9]|1[0-2])$/.test(m)) throw new TontineError('Premier mois invalide.');
+    g.mois_debut = m || null;
+    this._commit();
+  };
+
+  /** « Octobre 2026 » pour le tour n d'un groupe (si son premier mois est connu) */
+  Tontine.prototype.moisDuTour = function (g, tour) {
+    if (!g.mois_debut) return '';
+    var a = parseInt(g.mois_debut.slice(0, 4), 10), m = parseInt(g.mois_debut.slice(5, 7), 10) - 1 + (tour - 1);
+    return MOIS[m % 12] + ' ' + (a + Math.floor(m / 12));
   };
 
   Tontine.prototype.supprimerGroupeVide = function (gid) {
@@ -255,23 +352,25 @@
     var self = this, g = this.groupe(gid), lignes = [];
     for (var pos = 1; pos <= NB_POSITIONS; pos++) {
       var tit = this.d.parts.filter(function (p) { return p.groupe_id === gid && p.position === pos; })
-        .map(function (p) { var m = self.membre(p.membre_id); return { membre_id: m.id, nom: m.nom + ' ' + m.prenom, telephone: m.telephone, quarts: p.quarts }; })
+        .map(function (p) { var m = self.membre(p.membre_id); return { part_id: p.id, membre_id: m.id, nom: m.nom + ' ' + m.prenom, prenom_nom: (m.prenom + ' ' + m.nom).toUpperCase(), telephone: m.telephone, quarts: p.quarts }; })
         .sort(function (a, b) { return a.nom.localeCompare(b.nom, 'fr'); });
       var q = tit.reduce(function (s, t) { return s + t.quarts; }, 0);
       lignes.push({ position: pos, titulaires: tit, quarts: q,
-                    lot: g.mise_reference * NB_POSITIONS * q / QUARTS_CASE, etat: this.etatPosition(g, pos, q) });
+                    lot: g.mise_reference * NB_POSITIONS * q / QUARTS_CASE, etat: this.etatPosition(g, pos, q),
+                    mois: this.moisDuTour(g, pos) });
     }
     return lignes;
   };
 
   /** Première case que la part complète exactement, sinon la première avec assez de place */
-  function meilleurePlace(occ, ordre, quarts, dejaPris) {
+  function meilleurePlace(occ, ordre, quarts, dejaPris, interdits) {
     for (var e = 0; e < 2; e++) {
       var exact = e === 0;
       for (var i = 0; i < ordre.length; i++) {
         var gid = ordre[i];
         if (dejaPris.indexOf(gid) >= 0) continue;
         for (var pos = 1; pos <= NB_POSITIONS; pos++) {
+          if (interdits && interdits[gid + ':' + pos]) continue;
           var libre = QUARTS_CASE - occ[gid][pos];
           if (exact ? libre === quarts : libre >= quarts) return [gid, pos];
         }
@@ -280,13 +379,26 @@
     return null;
   }
 
-  /** MODULE A — attribution automatique : 4 quarts → 1 groupe, 2 → 2 groupes, 1 → 4 groupes */
-  Tontine.prototype.attribuer = function (membreId, quarts) {
-    var self = this;
-    if ([1, 2, 4].indexOf(quarts) < 0) throw new TontineError('Formule inconnue.');
+  function verifierMise(m) {
+    m = parseInt(String(m).replace(/[\s.]/g, ''), 10);
+    if (!(m > 0) || m % 4 !== 0) throw new TontineError('Le tarif doit être un montant positif divisible par 4.');
+    return m;
+  }
+
+  /** MODULE A — attribution automatique.
+   *  cleFormule : G100, S75, S50, S25 (un seul groupe) ou D50, Q25 (plusieurs groupes) ; mise : tarif du groupe.
+   *  Formules sur plusieurs groupes : des groupes différents où le membre n'est pas encore.
+   *  Formules sur un groupe : le membre peut déjà y être, mais jamais deux fois sur le même tour. */
+  Tontine.prototype.attribuer = function (membreId, cleFormule, mise) {
+    var self = this, f = formule(cleFormule);
+    if (!f) throw new TontineError('Formule inconnue.');
     if (!this.membre(membreId)) throw new TontineError('Membre introuvable.');
-    var nb = QUARTS_CASE / quarts, mise = this.mise();
-    var exclus = this.d.parts.filter(function (p) { return p.membre_id === membreId; }).map(function (p) { return p.groupe_id; });
+    var nb = f.groupes, aPlacer = f.parts.slice().sort(function (a, b) { return b - a; });   // la plus grosse part d'abord
+    mise = mise ? verifierMise(mise) : this.mise();
+    var siennes = this.d.parts.filter(function (p) { return p.membre_id === membreId; });
+    var exclus = nb > 1 ? siennes.map(function (p) { return p.groupe_id; }) : [];
+    var interdits = {};
+    siennes.forEach(function (p) { interdits[p.groupe_id + ':' + p.position] = true; });
     var ordre = this.d.groupes
       .filter(function (g) { return g.statut === 'OUVERT' && g.mise_reference === mise && exclus.indexOf(g.id) < 0; })
       .sort(function (a, b) { return a.id - b.id; })
@@ -294,26 +406,32 @@
     var occ = {};
     ordre.forEach(function (gid) { occ[gid] = self.occupation(gid); });
 
-    var choix = [];
-    for (var k = 0; k < nb; k++) {
-      var place = meilleurePlace(occ, ordre, quarts, choix.map(function (c) { return c[0]; }));
-      if (!place) break;
-      choix.push(place);
-      occ[place[0]][place[1]] += quarts;
-    }
-    while (choix.length < nb) choix.push([this._insererGroupe(mise), 1]);
+    var choix = [];                                  // [groupe, tour, quarts]
+    aPlacer.forEach(function (q) {
+      var place = meilleurePlace(occ, ordre, q, choix.map(function (c) { return c[0]; }), interdits);
+      if (place) {
+        occ[place[0]][place[1]] += q;
+        choix.push([place[0], place[1], q]);
+      } else {
+        choix.push([null, 1, q]);                    // pas de place : nouveau groupe
+      }
+    });
+    choix.forEach(function (c) { if (c[0] === null) c[0] = self._insererGroupe(mise); });
 
     choix.forEach(function (c) {
       self.d.parts.push({ id: self._id('parts'), membre_id: membreId, groupe_id: c[0], position: c[1],
-                          quarts: quarts, date_attribution: aujourdhui() });
+                          quarts: c[2], date_attribution: aujourdhui() });
     });
     this._commit();
-    return choix.map(function (c) { return { code: self.groupe(c[0]).code, position: c[1] }; });
+    return choix.map(function (c) { return { code: self.groupe(c[0]).code, position: c[1], quarts: c[2], mise: mise }; });
   };
 
-  Tontine.prototype.retirerPart = function (gid, membreId) {
-    if (this.groupe(gid).statut !== 'OUVERT') throw new TontineError("On ne peut retirer une part que d'un groupe non démarré.");
-    this.d.parts = this.d.parts.filter(function (p) { return !(p.groupe_id === gid && p.membre_id === membreId); });
+  /** Retire une part d'un groupe non démarré (partId) */
+  Tontine.prototype.retirerPart = function (partId) {
+    var p = this.d.parts.find(function (x) { return x.id === partId; });
+    if (!p) throw new TontineError('Part introuvable.');
+    if (this.groupe(p.groupe_id).statut !== 'OUVERT') throw new TontineError("On ne peut retirer une part que d'un groupe non démarré.");
+    this.d.parts = this.d.parts.filter(function (x) { return x.id !== partId; });
     this._commit();
   };
 
@@ -381,17 +499,39 @@
   /** Tirage au sort de l'ordre de passage.
    *  Groupe ouvert : les 10 tours. Groupe en cours : seulement les tours après le tour courant.
    *  Les co-titulaires d'une même case restent ensemble. */
-  Tontine.prototype.tirageAuSort = function (gid, alea) {
+  Tontine.prototype.debutTirage = function (gid) {
+    var g = this.groupe(gid);
+    return g.statut === 'EN_COURS' ? g.tour_courant + 1 : 1;
+  };
+
+  /** forces : { tour actuel de la case : tour imposé } — ces cases sont placées d'office, les autres sont tirées au sort */
+  Tontine.prototype.tirageAuSort = function (gid, alea, forces) {
     var g = this.groupe(gid);
     if (!g) throw new TontineError('Groupe introuvable.');
     if (g.statut === 'CLOTURE') throw new TontineError('Ce groupe est clôturé.');
-    var debut = g.statut === 'EN_COURS' ? g.tour_courant + 1 : 1;
+    var debut = this.debutTirage(gid);
     var positions = [];
     for (var p = debut; p <= NB_POSITIONS; p++) positions.push(p);
     if (positions.length < 2) throw new TontineError('Il ne reste pas assez de tours à tirer au sort.');
-    var tirees = melanger(positions, alea || aleaSur);
-    var cible = {}, desc = [];
-    positions.forEach(function (pos, i) { cible[pos] = tirees[i]; if (pos !== tirees[i]) desc.push(pos + '→' + tirees[i]); });
+    forces = forces || {};
+    var cible = {}, prises = {};
+    Object.keys(forces).forEach(function (k) {
+      var de = parseInt(k, 10), vers = parseInt(forces[k], 10);
+      if (!vers) return;
+      if (positions.indexOf(de) < 0 || positions.indexOf(vers) < 0) {
+        throw new TontineError('Place imposée impossible : seuls les tours ' + debut + ' à 10 peuvent être tirés.');
+      }
+      if (prises[vers]) throw new TontineError('Deux cases ne peuvent pas être imposées au même tour (' + vers + ').');
+      prises[vers] = true;
+      cible[de] = vers;
+    });
+    var sources = positions.filter(function (x) { return cible[x] === undefined; });
+    var libres = melanger(positions.filter(function (x) { return !prises[x]; }), alea || aleaSur);
+    sources.forEach(function (x, i) { cible[x] = libres[i]; });
+    var desc = [];
+    positions.forEach(function (pos) {
+      if (pos !== cible[pos] || forces[pos]) desc.push(pos + '→' + cible[pos] + (forces[pos] ? ' (imposé)' : ''));
+    });
     this.d.parts.forEach(function (x) {
       if (x.groupe_id === gid && cible[x.position] !== undefined) x.position = cible[x.position];
     });
@@ -409,8 +549,8 @@
     if (!nouveau) throw new TontineError('Choisissez le nouveau titulaire.');
     if (g.statut === 'CLOTURE') throw new TontineError('Ce groupe est clôturé.');
     if (nouveau.id === ancien.id) throw new TontineError('Le nouveau titulaire est le même que l\'ancien.');
-    if (this.d.parts.some(function (x) { return x.groupe_id === g.id && x.membre_id === nouveau.id; })) {
-      throw new TontineError(nouveau.nom + ' ' + nouveau.prenom + ' a déjà une part dans le groupe ' + g.code + '.');
+    if (this.d.parts.some(function (x) { return x.groupe_id === g.id && x.position === p.position && x.membre_id === nouveau.id; })) {
+      throw new TontineError(nouveau.nom + ' ' + nouveau.prenom + ' a déjà une part au tour ' + p.position + ' du groupe ' + g.code + '.');
     }
     p.membre_id = nouveau.id;
     this.d.permutations.push({ id: this._id('permutations'), groupe_id: g.id, date_operation: maintenant(),
@@ -443,11 +583,24 @@
       .sort(trierDetails);
   };
 
+  /** Versements impayés des échéances déjà clôturées (gid facultatif) */
+  Tontine.prototype.retards = function (gid) {
+    var self = this;
+    return this.d.versements.map(function (v) { return self._detailVersement(v); })
+      .filter(function (x) { return (!gid || x.groupe_id === gid) && x.statut === 'IMPAYE' && x.echeance < x._g.tour_courant; })
+      .map(function (x) { x.mois = self.moisDuTour(x._g, x.echeance); delete x._g; return x; })
+      .sort(trierDetails);
+  };
+
   Tontine.prototype.marquer = function (ids, statut) {
     if (['PAYE', 'IMPAYE'].indexOf(statut) < 0) throw new TontineError('Statut invalide.');
     var date = statut === 'PAYE' ? aujourdhui() : null;
     this.d.versements.forEach(function (v) {
-      if (ids.indexOf(v.id) >= 0) { v.statut = statut; v.date_paiement = date; }
+      if (ids.indexOf(v.id) >= 0) {
+        if (statut === 'PAYE' && v.statut !== 'PAYE') v.date_paiement = date;
+        if (statut === 'IMPAYE') v.date_paiement = null;
+        v.statut = statut;
+      }
     });
     this._commit();
   };
@@ -473,6 +626,43 @@
     }
     this._commit();
     return suivant;
+  };
+
+  /* ---------- suivi individuel d'un membre ---------- */
+  Tontine.prototype.suiviMembre = function (membreId) {
+    var self = this, m = this.membre(membreId);
+    if (!m) throw new TontineError('Membre introuvable.');
+    var lignes = this.d.parts.filter(function (p) { return p.membre_id === membreId; }).map(function (p) {
+      var g = self.groupe(p.groupe_id);
+      var vers = self.d.versements.filter(function (v) { return v.part_id === p.id; });
+      var paye = vers.filter(function (v) { return v.statut === 'PAYE'; }).reduce(function (s, v) { return s + v.montant; }, 0);
+      var du = vers.filter(function (v) { return v.echeance < g.tour_courant || v.statut === 'PAYE'; }).reduce(function (s, v) { return s + v.montant; }, 0);
+      var retard = vers.filter(function (v) { return v.statut === 'IMPAYE' && v.echeance < g.tour_courant; });
+      var rem = self._remise(p.id, p.position);
+      var cot = g.mise_reference * p.quarts / QUARTS_CASE;
+      return {
+        part_id: p.id, groupe_id: g.id, code: g.code, nom_groupe: g.nom, statut: g.statut, tour: p.position,
+        mois: self.moisDuTour(g, p.position), pct: p.quarts * 25, tarif: g.mise_reference, cotisation: cot,
+        engagement_total: cot * NB_POSITIONS, verse: paye, du_a_ce_jour: du,
+        retards: retard.length, montant_retards: retard.reduce(function (s, v) { return s + v.montant; }, 0),
+        mois_payes: vers.filter(function (v) { return v.statut === 'PAYE'; }).length, mois_ouverts: vers.length,
+        lot: cot * NB_POSITIONS,
+        etat_lot: rem ? 'Reçu le ' + String(rem.date_remise).split('-').reverse().join('/') : (g.statut !== 'OUVERT' && p.position < g.tour_courant ? 'À remettre'
+                 : g.statut === 'EN_COURS' && p.position === g.tour_courant ? 'Ce mois-ci' : 'En attente'),
+        lot_recu: rem ? rem.montant : 0
+      };
+    }).sort(function (a, b) { return a.groupe_id - b.groupe_id || a.tour - b.tour; });
+    var somme = function (k) { return lignes.reduce(function (s, l) { return s + l[k]; }, 0); };
+    var du = somme('du_a_ce_jour'), verse = somme('verse');
+    return {
+      membre: m, parts: lignes,
+      total: {
+        nb_parts: lignes.length, groupes: lignes.map(function (l) { return l.groupe_id; }).filter(function (x, i, t) { return t.indexOf(x) === i; }).length,
+        engagement_pct: somme('pct'), cotisation_mensuelle: somme('cotisation'), engagement_total: somme('engagement_total'),
+        verse: verse, du_a_ce_jour: du, retards: somme('retards'), montant_retards: somme('montant_retards'),
+        taux: du ? Math.round(100 * verse / du) : null, lots_prevus: somme('lot'), lots_recus: somme('lot_recu')
+      }
+    };
   };
 
   /* ---------- remise du lot aux bénéficiaires ---------- */
@@ -581,9 +771,38 @@
     return migrer(obj);
   };
 
+  /** 250000 → « deux cent cinquante mille » (montants des fiches de remise) */
+  function nombreEnLettres(n) {
+    n = Math.floor(Math.abs(n));
+    if (n === 0) return 'zéro';
+    var u = ['', 'un', 'deux', 'trois', 'quatre', 'cinq', 'six', 'sept', 'huit', 'neuf', 'dix', 'onze', 'douze', 'treize',
+             'quatorze', 'quinze', 'seize', 'dix-sept', 'dix-huit', 'dix-neuf'];
+    var d = ['', '', 'vingt', 'trente', 'quarante', 'cinquante', 'soixante', 'soixante', 'quatre-vingt', 'quatre-vingt'];
+    function moinsDeCent(x, final) {
+      if (x < 20) return u[x];
+      var dz = Math.floor(x / 10), un = x % 10;
+      if (dz === 7 || dz === 9) return d[dz] + (dz === 7 && un === 1 ? ' et ' : '-') + u[10 + un];
+      if (un === 0) return d[dz] + (dz === 8 && final ? 's' : '');
+      return d[dz] + (un === 1 && dz < 8 ? ' et un' : '-' + u[un]);
+    }
+    function moinsDeMille(x, final) {
+      var c = Math.floor(x / 100), r = x % 100, t = '';
+      if (c) t = (c > 1 ? u[c] + ' ' : '') + 'cent' + (c > 1 && r === 0 && final ? 's' : '');
+      if (r) t += (t ? ' ' : '') + moinsDeCent(r, final);
+      return t;
+    }
+    var parts = [], milliards = Math.floor(n / 1e9), millions = Math.floor(n / 1e6) % 1000, milliers = Math.floor(n / 1000) % 1000, reste = n % 1000;
+    if (milliards) parts.push(moinsDeMille(milliards, true) + ' milliard' + (milliards > 1 ? 's' : ''));
+    if (millions) parts.push(moinsDeMille(millions, true) + ' million' + (millions > 1 ? 's' : ''));
+    if (milliers) parts.push(milliers === 1 ? 'mille' : moinsDeMille(milliers, false) + ' mille');
+    if (reste) parts.push(moinsDeMille(reste, true));
+    return parts.join(' ');
+  }
+
   var api = {
     Tontine: Tontine, TontineError: TontineError, etatVide: etatVide,
-    FORMULES: FORMULES, RAPPORTS: RAPPORTS, MODES: MODES, melanger: melanger, NB_POSITIONS: NB_POSITIONS, QUARTS_CASE: QUARTS_CASE
+    FORMULES: FORMULES, formule: formule, TARIFS_DEFAUT: TARIFS_DEFAUT, MOIS: MOIS,
+    RAPPORTS: RAPPORTS, MODES: MODES, melanger: melanger, nombreEnLettres: nombreEnLettres, NB_POSITIONS: NB_POSITIONS, QUARTS_CASE: QUARTS_CASE
   };
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
   else global.TontineCore = api;

@@ -29,7 +29,15 @@ body {
 }
 
 /* ---------- en-tête et navigation ---------- */
-.entete { background: var(--vert); color: #fff; }
+.entete { background: var(--vert); color: #fff; padding-top: env(safe-area-inset-top); }
+.btn-installer {
+  margin-left: 10px; font: inherit; font-size: .82rem; font-weight: 600; cursor: pointer;
+  background: #fff; color: var(--vert); border: 0; border-radius: 99px; padding: 5px 12px;
+}
+.btn-installer:hover { background: var(--vert-clair); }
+.etapes { margin: 6px 0 0; padding-left: 20px; }
+.etapes li { margin-bottom: 4px; }
+@media (display-mode: standalone) { .pied { padding-bottom: calc(16px + env(safe-area-inset-bottom)); } }
 .entete-haut {
   max-width: 1180px; margin: 0 auto; padding: 14px 16px 8px;
   display: flex; align-items: baseline; justify-content: space-between; gap: 12px; flex-wrap: wrap;
@@ -66,7 +74,8 @@ h3 { font-size: 1rem; margin: 0; }
 .val.ko { color: var(--rouge); }
 
 .grille-2 { display: grid; grid-template-columns: minmax(280px, 360px) 1fr; gap: 18px; align-items: start; }
-@media (max-width: 860px) { .grille-2 { grid-template-columns: 1fr; } }
+.grille-2.egal { grid-template-columns: 1fr 1fr; }
+@media (max-width: 860px) { .grille-2, .grille-2.egal { grid-template-columns: 1fr; } }
 
 /* ---------- formulaires ---------- */
 label { display: block; font-size: .82rem; color: var(--doux); margin: 0 0 4px; }
@@ -173,3 +182,43 @@ tr.cliquable { cursor: pointer; }
   .imprime-titre { display: block !important; }
 }
 .imprime-titre { display: none; }
+
+/* ---------- suivi d'un membre ---------- */
+.suivi { display: grid; grid-template-columns: repeat(auto-fit, minmax(110px, 1fr)); gap: 8px; margin: 12px 0; }
+.suivi div { background: #f8faf9; border: 1px solid var(--bord); border-radius: 8px; padding: 8px 10px; }
+.suivi span, .suivi small { display: block; color: var(--doux); font-size: .74rem; }
+.suivi strong { display: block; font-size: 1.02rem; font-variant-numeric: tabular-nums; }
+
+/* ---------- affiches ---------- */
+.apercu-affiche { display: flex; justify-content: center; background: #e9edeb; border-radius: 0 0 var(--rayon) var(--rayon); }
+.canvas-affiche { width: 100%; max-width: 380px; height: auto; box-shadow: 0 4px 18px rgba(0, 0, 0, .18); border-radius: 6px; }
+
+/* ---------- documents à imprimer (fiche de remise, relevé) ---------- */
+#impression { display: none; }
+.doc { font-family: "Segoe UI", Arial, sans-serif; color: #111; font-size: 12.5px; }
+.doc header { display: flex; justify-content: space-between; border-bottom: 2px solid #1d5f3a; padding-bottom: 6px; margin-bottom: 8px; }
+.doc header strong { font-size: 15px; }
+.doc-num { text-align: right; font-size: 11px; color: #444; }
+.doc h1 { font-size: 17px; text-align: center; letter-spacing: 1px; margin: 6px 0 10px; }
+.doc-sous { text-align: center; margin: -6px 0 10px; color: #444; }
+.doc-table { width: 100%; border-collapse: collapse; margin-bottom: 8px; }
+.doc-table th, .doc-table td { border: 1px solid #999; padding: 5px 8px; text-align: left; vertical-align: top; font-size: 12px; text-transform: none; letter-spacing: 0; color: #111; background: none; }
+.doc-table th { width: 30%; background: #f1f4f2; font-weight: 600; }
+.doc-grille th { width: auto; }
+.doc-montant { font-size: 15px; }
+.doc-blanc { display: inline-block; min-width: 180px; border-bottom: 1px dotted #555; height: 14px; }
+.doc-texte { line-height: 1.5; margin: 8px 0 12px; }
+.doc-signatures { display: grid; grid-template-columns: repeat(3, 1fr); gap: 14px; }
+.doc-signatures div { border-top: 1px solid #333; padding-top: 4px; min-height: 70px; text-align: center; font-weight: 600; }
+.doc-signatures small { font-weight: 400; color: #555; }
+.doc-coupe { border-top: 1px dashed #777; margin: 18px 0; text-align: center; line-height: 0; color: #777; }
+.doc-chiffres { display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px; margin-bottom: 10px; }
+.doc-chiffres div { border: 1px solid #bbb; border-radius: 6px; padding: 6px 8px; }
+.doc-chiffres span, .doc-chiffres small { display: block; font-size: 10.5px; color: #555; }
+.doc-chiffres strong { font-size: 14px; }
+.doc-fiche { page-break-inside: avoid; }
+@media print {
+  body.mode-document > *:not(#impression) { display: none !important; }
+  body.mode-document #impression { display: block; }
+  @page { margin: 12mm; }
+}

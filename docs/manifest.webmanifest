@@ -1,0 +1,17 @@
+{
+  "name": "Gestionnaire de Tontines",
+  "short_name": "Tontine",
+  "description": "Membres, groupes de dix, parts 25/50/75/100 %, versements, retards, tirage au sort et remise des lots.",
+  "lang": "fr",
+  "start_url": "./index.html",
+  "scope": "./",
+  "display": "standalone",
+  "orientation": "any",
+  "background_color": "#f4f6f5",
+  "theme_color": "#1d5f3a",
+  "icons": [
+    { "src": "icons/icone-192.png", "sizes": "192x192", "type": "image/png" },
+    { "src": "icons/icone-512.png", "sizes": "512x512", "type": "image/png" },
+    { "src": "icons/icone-maskable-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
+  ]
+}
