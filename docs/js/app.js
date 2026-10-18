@@ -21,15 +21,59 @@
       return null;
     }
   }
+  var CLE_MODIFS = 'tontine.modifs_depuis_envoi', CLE_COPIE_JOUR = 'tontine.copie_du_jour';
   function enregistrer(d) {
-    try { localStorage.setItem(CLE, JSON.stringify(d)); }
-    catch (e) { stockageOk = false; toast("Impossible d'enregistrer dans ce navigateur. Exportez vos données !", 'erreur'); }
+    try {
+      localStorage.setItem(CLE, JSON.stringify(d));
+      localStorage.setItem(CLE_MODIFS, String((Number(localStorage.getItem(CLE_MODIFS)) || 0) + 1));
+      if (localStorage.getItem(CLE_COPIE_JOUR) !== new Date().toISOString().slice(0, 10)) {
+        localStorage.setItem(CLE_COPIE_JOUR, new Date().toISOString().slice(0, 10));
+        copie('Copie automatique du jour');
+      }
+    } catch (e) {
+      stockageOk = false;
+      toast("Impossible d'enregistrer dans ce navigateur (mémoire pleine ou navigation privée). Envoyez une sauvegarde tout de suite !", 'erreur');
+    }
+  }
+
+  /** Copie de sécurité dans l'appareil (copies.js) — avant chaque opération sensible */
+  function copie(raison) {
+    if (!window.TontineCopies || !T) return;
+    TontineCopies.ajouter(T.exporter(), raison, T.d.membres.length + ' membres · ' + T.d.groupes.length + ' groupes · ' +
+      T.d.versements.filter(function (v) { return v.statut === 'PAYE'; }).length + ' cotisations payées');
+  }
+
+  function modifsDepuisEnvoi() { return Number(localStorage.getItem(CLE_MODIFS)) || 0; }
+
+  function nomSauvegarde() {
+    return 'tontine_' + T.d.parametres.nom_tontine.toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_|_$/g, '') + '_' +
+      new Date().toISOString().slice(0, 16).replace(/[-:T]/g, '') + '.json';
+  }
+
+  function marquerEnvoye() {
+    try { localStorage.setItem(CLE_SAUVEGARDE, String(Date.now())); localStorage.setItem(CLE_MODIFS, '0'); } catch (x) { /* ignore */ }
+  }
+
+  /** Envoie la sauvegarde vers WhatsApp, e-mail, Drive… (partage du téléphone) ; sinon la télécharge */
+  function envoyerSauvegarde() {
+    var fichier = new File([T.exporter()], nomSauvegarde(), { type: 'application/json' });
+    if (navigator.canShare && navigator.canShare({ files: [fichier] })) {
+      navigator.share({ files: [fichier], title: 'Sauvegarde ' + T.d.parametres.nom_tontine,
+                        text: 'Sauvegarde de la tontine du ' + new Date().toLocaleDateString('fr-FR') })
+        .then(function () { marquerEnvoye(); toast('Sauvegarde envoyée. Gardez ce fichier précieusement.', 'succes'); rendre(); })
+        .catch(function () { /* partage annulé */ });
+    } else {
+      telecharger(T.exporter(), nomSauvegarde(), 'application/json');
+      marquerEnvoye();
+      toast('Sauvegarde téléchargée : envoyez ce fichier sur WhatsApp, par e-mail ou sur Google Drive.', 'succes');
+      rendre();
+    }
   }
   var T = new C.Tontine(charger(), enregistrer);
 
   /* ---------- état de l'interface ---------- */
   var D = window.TontineDocs;
-  var ui = { afType: 'groupe', afGroupe: null, afFormat: 'statut', afTheme: 'corail', afTitre: '', membreVu: null, editionMembre: false, editionRemise: null, tirage: false, recherche: '', groupeId: null, payGroupe: null, payEch: null, rapType: 'IMPAYES', rapGroupe: null };
+  var ui = { dossier: null, filtreMembres: 'TOUS', filtreGroupes: 'ACTIFS', encaisser: null, detailVers: null, dernierMode: 'ESPECES', afType: 'groupe', afGroupe: null, afFormat: 'statut', afTheme: 'corail', afTitre: '', membreVu: null, editionMembre: false, editionRemise: null, tirage: false, recherche: '', groupeId: null, payGroupe: null, payEch: null, rapType: 'IMPAYES', rapGroupe: null };
 
   /* ---------- outils ---------- */
   function e(v) {
@@ -135,11 +179,14 @@
   function rappelSauvegarde() {
     if (!stockageOk) return '<div class="alerte attention">Ce navigateur bloque l\'enregistrement (navigation privée ?). Vos données seront perdues à la fermeture : exportez-les dans Paramètres.</div>';
     if (!T.d.membres.length) return '';
-    var der = localStorage.getItem(CLE_SAUVEGARDE);
+    var der = localStorage.getItem(CLE_SAUVEGARDE), n = modifsDepuisEnvoi();
     var jours = der ? (Date.now() - Number(der)) / 86400000 : Infinity;
-    if (jours < 7) return '';
-    return '<div class="alerte attention no-print">' + (der ? 'Dernière sauvegarde il y a ' + Math.floor(jours) + ' jours.' : 'Aucune sauvegarde exportée pour le moment.') +
-           ' Les données ne sont que dans ce navigateur : <a href="#parametres">exporter une sauvegarde</a>.</div>';
+    if (!n || (jours < 1 && n < 30)) return '';
+    return '<div class="alerte attention no-print" style="display:flex;gap:10px;align-items:center;flex-wrap:wrap"><span style="flex:1 1 220px">' +
+           (der ? n + ' modification(s) depuis le dernier envoi de la sauvegarde (' + new Date(Number(der)).toLocaleDateString('fr-FR') + ').'
+                : 'Aucune sauvegarde n\'a encore été envoyée hors du téléphone.') +
+           ' Si le téléphone est perdu, ces données le seront aussi.</span>' +
+           '<button class="btn petit plein" data-action="envoyer-sauvegarde">📤 Envoyer la sauvegarde</button></div>';
   }
 
   /* =================================================================
@@ -205,7 +252,8 @@
     } else if (m) {
       var parts = T.partsDuMembre(m.id);
       h += '<div class="carte"><div class="carte-tete"><h3>' + e(m.nom + ' ' + m.prenom) + '</h3>' +
-           '<button class="btn petit" data-action="editer-membre">Modifier</button></div>' +
+           '<span style="display:flex;gap:6px"><button class="btn petit" data-action="ouvrir-dossier" data-id="' + m.id + '">📂 Dossier</button>' +
+         '<button class="btn petit" data-action="editer-membre">Modifier</button></span></div>' +
            '<div class="carte-corps"><p class="aide" style="margin:0 0 8px">Tél. ' + lienTel(m.telephone) +
            (m.telephone2 ? ' · ' + lienTel(m.telephone2) : '') + (m.cni ? ' · CNI ' + e(m.cni) : ' · CNI non renseignée') + '</p><ul class="liste">';
       parts.forEach(function (p) {
@@ -226,7 +274,7 @@
            '<h3 style="margin-bottom:10px">Nouvelle souscription</h3>' + champsAttribution(false) +
            '<button class="btn plein">Attribuer</button></form></div>';
     }
-    h += '</div><div class="carte"><div class="carte-tete"><input type="search" id="recherche" placeholder="Rechercher : nom, téléphone ou n° CNI" value="' +
+    h += '</div><div class="carte"><div class="carte-tete" style="flex-direction:column;align-items:stretch">' + filtresMembres() + '<input type="search" id="recherche" placeholder="Rechercher : nom, téléphone ou n° CNI" value="' +
          e(ui.recherche) + '" style="max-width:420px"></div><div class="tableau-wrap"><table>' +
          '<thead><tr><th>#</th><th>Nom et prénom</th><th>Téléphone</th><th>Inscrit le</th><th class="c">Parts</th><th class="c">Engagement</th><th></th></tr></thead>' +
          '<tbody id="corps-membres">' + lignesMembres() + '</tbody></table></div></div></div>';
@@ -239,14 +287,49 @@
       '<div class="champ"><label>N° CNI (facultatif)</label><input name="cni" autocomplete="off" value="' + e(m.cni || '') + '"></div>';
   }
 
+  var BADGE_STATUT = { ACTIF: 'EN_COURS', ANCIEN: 'CLOTURE', SANS_GROUPE: 'OUVERT' };
+  var LIB_STATUT_M = { ACTIF: 'Actif', ANCIEN: 'Inactif', SANS_GROUPE: 'Sans groupe' };
+  function badgeConfiance(c) {
+    if (!c) return '';
+    var coul = { BON: '#1d5f3a', MOYEN: '#7a5b00', MAUVAIS: '#b3261e', SURVEILLER: '#b3261e' }[c];
+    return ' <span class="badge" style="color:' + coul + ';border:1px solid ' + coul + ';background:#fff">' + e(C.CONFIANCE[c]) + '</span>';
+  }
+
+  function filtresMembres() {
+    var tous = T.listeMembres(''), n = { TOUS: tous.length, ACTIF: 0, ANCIEN: 0, SANS_GROUPE: 0 };
+    tous.forEach(function (m) { n[m.statut]++; });
+    return '<div class="puces" style="margin:0">' + [['TOUS', 'Tous'], ['ACTIF', 'Actifs'], ['ANCIEN', 'Inactifs'], ['SANS_GROUPE', 'Sans groupe']].map(function (x) {
+      return '<button class="puce' + (ui.filtreMembres === x[0] ? ' actif' : '') + '" data-action="filtre-membres" data-f="' + x[0] + '" style="min-width:0;padding:5px 10px">' +
+             '<strong>' + x[1] + ' (' + n[x[0]] + ')</strong></button>';
+    }).join('') + '<button class="btn petit" data-action="export-membres" style="margin-left:auto">⬇ Exporter la liste (CSV)</button></div>';
+  }
+
+  function exporterMembres() {
+    var liste = T.listeMembres('').filter(function (m) { return ui.filtreMembres === 'TOUS' || m.statut === ui.filtreMembres; });
+    var lignes = [['N°', 'Nom', 'Prénom', 'Téléphone', '2e téléphone', 'CNI', 'Inscrit le', 'Statut', 'Confiance', 'Parts en cours', 'Parts au total', 'Participation %', 'Retards', 'Observations']];
+    liste.forEach(function (m) {
+      lignes.push([m.id, m.nom, m.prenom, m.telephone, m.telephone2 || '', m.cni || '', m.date_inscription, LIB_STATUT_M[m.statut],
+                   m.confiance ? C.CONFIANCE[m.confiance] : '', m.nb_parts, m.nb_parts_total, m.engagement, m.retards,
+                   T.observations(m.id).map(function (o) { return o.date + ' ' + C.APPRECIATIONS[o.appreciation] + ' : ' + o.texte; }).join(' | ')]);
+    });
+    var csv = lignes.map(function (r) {
+      return r.map(function (v) { v = String(v); return /[;"\n]/.test(v) ? '"' + v.replace(/"/g, '""') + '"' : v; }).join(';');
+    }).join('\r\n');
+    telecharger('\ufeff' + csv, 'membres_' + ui.filtreMembres.toLowerCase() + '_' + aujourdhuiIso() + '.csv', 'text/csv;charset=utf-8');
+  }
+
   function lignesMembres() {
-    var liste = T.listeMembres(ui.recherche), h = '';
+    var liste = T.listeMembres(ui.recherche).filter(function (m) { return ui.filtreMembres === 'TOUS' || m.statut === ui.filtreMembres; }), h = '';
     liste.forEach(function (m) {
       h += '<tr class="cliquable' + (m.id === ui.membreVu ? ' choisi' : '') + '" data-action="voir-membre" data-id="' + m.id + '">' +
-           '<td>' + m.id + '</td><td><strong>' + e(m.nom) + '</strong> ' + e(m.prenom) + (m.cni ? '<br><span class="aide">CNI ' + e(m.cni) + '</span>' : '') + '</td>' +
+           '<td>' + m.id + '</td><td><strong>' + e(m.nom) + '</strong> ' + e(m.prenom) + badgeConfiance(m.confiance) +
+           '<br><span class="badge ' + BADGE_STATUT[m.statut] + '">' + LIB_STATUT_M[m.statut] + '</span>' +
+           (m.retards ? ' <span class="badge" style="background:var(--rouge-clair);color:var(--rouge)">' + m.retards + ' retard(s)</span>' : '') +
+           (m.cni ? '<br><span class="aide">CNI ' + e(m.cni) + '</span>' : '') + '</td>' +
            '<td>' + e(m.telephone) + (m.telephone2 ? '<br><span class="aide">' + e(m.telephone2) + '</span>' : '') + '</td>' +
            '<td>' + dateFr(m.date_inscription) + '</td><td class="c">' + m.nb_parts + '</td><td class="c">' + m.engagement + ' %</td>' +
-           '<td class="d">' + (m.nb_parts ? '' : '<button class="btn petit danger" data-action="supprimer-membre" data-id="' + m.id + '">Supprimer</button>') + '</td></tr>';
+           '<td class="d"><button class="btn petit" data-action="ouvrir-dossier" data-id="' + m.id + '">📂 Dossier</button>' +
+           (m.nb_parts_total ? '' : ' <button class="btn petit danger" data-action="supprimer-membre" data-id="' + m.id + '">Supprimer</button>') + '</td></tr>';
     });
     return h || '<tr><td colspan="7" class="vide">Aucun membre.</td></tr>';
   }
@@ -261,9 +344,16 @@
    *  VUE 3 : GROUPES DE DIX (Module B)
    * ================================================================= */
   function vueGroupes() {
-    var groupes = T.listeGroupes();
-    if (!T.groupe(ui.groupeId)) ui.groupeId = groupes.length ? groupes[0].id : null;
-    var h = '<h2 class="no-print">Groupes de dix</h2><div class="puces no-print">';
+    var tousG = T.listeGroupes();
+    var groupes = tousG.filter(function (g) {
+      return ui.filtreGroupes === 'TOUS' || (ui.filtreGroupes === 'CLOTURES' ? g.statut === 'CLOTURE' : g.statut !== 'CLOTURE');
+    });
+    if (!groupes.some(function (g) { return g.id === ui.groupeId; })) ui.groupeId = groupes.length ? groupes[0].id : null;
+    var nbClos = tousG.filter(function (g) { return g.statut === 'CLOTURE'; }).length;
+    var h = '<h2 class="no-print">Groupes de dix</h2><div class="puces no-print" style="margin-bottom:8px">' +
+      [['ACTIFS', 'Ouverts et en cours (' + (tousG.length - nbClos) + ')'], ['CLOTURES', 'Archives : clôturés (' + nbClos + ')'], ['TOUS', 'Tous']].map(function (x) {
+        return '<button class="puce' + (ui.filtreGroupes === x[0] ? ' actif' : '') + '" data-action="filtre-groupes" data-f="' + x[0] + '" style="min-width:0;padding:5px 10px"><strong>' + x[1] + '</strong></button>';
+      }).join('') + '</div><div class="puces no-print">';
     groupes.forEach(function (g) {
       h += '<button class="puce' + (g.id === ui.groupeId ? ' actif' : '') + '" data-action="voir-groupe" data-id="' + g.id + '"><strong>' + e(g.code) +
            ' ' + badge(g.statut) + '</strong><small>' + fcfa(g.mise_reference) + ' · ' +
@@ -400,14 +490,18 @@
     lignes.forEach(function (l) {
       var paye = l.statut === 'PAYE';
       h += '<tr class="' + (paye ? 'paye' : 'impaye') + '"><td><input type="checkbox" class="case" value="' + l.id + '" style="min-height:0;width:auto"></td>' +
-           '<td class="c">' + l.position + '</td><td>' + e(l.membre) + '</td><td class="mm">' + lienTel(l.telephone) + '</td><td class="c mm">' + l.pct + ' %</td>' +
+           '<td class="c">' + l.position + '</td><td>' + e(l.membre) + (paye ? '<br><span class="aide">' + e(l.mode_libelle || 'Espèces') + (l.reference ? ' · ' + e(l.reference) : '') + '</span>' : '') +
+           '</td><td class="mm">' + lienTel(l.telephone) + '</td><td class="c mm">' + l.pct + ' %</td>' +
            '<td class="d">' + fcfa(l.montant) + '</td><td class="c"><button class="btn petit statut-btn' + (paye ? ' plein' : ' danger') + '" data-action="basculer" data-id="' + l.id +
            '" data-statut="' + l.statut + '">' + (paye ? '✔ Payé' : '✘ Impayé') + '</button></td><td class="mm">' + dateFr(l.date_paiement) + '</td></tr>';
+      if (ui.encaisser === l.id) h += ligneEncaissement(l, 8);
+      else if (ui.detailVers === l.id && paye) h += ligneDetailPaiement(l, 8);
     });
     h += '</tbody></table></div><div class="carte-pied no-print">' +
-         '<button class="btn plein" data-action="marquer" data-statut="PAYE">✔ Marquer la sélection Payé</button>' +
-         '<button class="btn danger" data-action="marquer" data-statut="IMPAYE">✘ Marquer Impayé</button>' +
-         '<span class="aide">Touchez le bouton de statut d\'une ligne pour la basculer.</span></div></div>';
+         '<div style="flex:0 1 170px"><label>Mode pour la sélection</label>' + selectModes(ui.dernierMode, 'mode-groupe') + '</div>' +
+         '<button class="btn plein" data-action="marquer" data-statut="PAYE" style="align-self:flex-end">✔ Marquer la sélection Payé</button>' +
+         '<button class="btn danger" data-action="marquer" data-statut="IMPAYE" style="align-self:flex-end">✘ Marquer Impayé</button>' +
+         '<span class="aide" style="flex-basis:100%">Touchez « Impayé » pour encaisser une cotisation avec son mode et sa référence ; touchez « Payé » pour voir le détail, le reçu ou corriger.</span></div></div>';
     if (ech !== tour) h = h.replace('<div class="chiffres">', '<div class="alerte attention">Échéance ' + ech + ' déjà clôturée : les paiements que vous cochez ici règlent des retards.</div><div class="chiffres">');
     h += carteRetards(g.id);
     h += carteRemises(g, ech);
@@ -429,14 +523,41 @@
     liste.slice(0, limite || liste.length).forEach(function (l) {
       h += '<tr class="impaye">' + (gid ? '' : '<td>' + e(l.groupe) + '</td>') + '<td class="c">' + l.echeance + (l.mois ? '<br><span class="aide">' + e(l.mois) + '</span>' : '') +
            '</td><td>' + e(l.membre) + '</td><td class="mm">' + lienTel(l.telephone) + '</td><td class="d">' + fcfa(l.montant) + '</td>' +
-           '<td class="c no-print"><button class="btn petit plein" data-action="regler" data-id="' + l.id + '">Régler</button></td></tr>';
+           '<td class="c no-print" style="white-space:nowrap"><button class="btn petit plein" data-action="regler" data-id="' + l.id + '">Régler</button> ' +
+           '<button class="btn petit" data-action="rappel" data-id="' + l.id + '" title="Envoyer un rappel WhatsApp">📣' + (T.d.versements.find(function (x) { return x.id === l.id; }).rappels.length ? ' ' + T.d.versements.find(function (x) { return x.id === l.id; }).rappels.length : '') + '</button></td></tr>';
+      if (ui.encaisser === l.id) h += ligneEncaissement(l, gid ? 5 : 6);
     });
     if (limite && liste.length > limite) h += '<tr><td colspan="6" class="vide">… et ' + (liste.length - limite) + ' autre(s) : voir Paiements.</td></tr>';
     return h + '</tbody></table></div></div>';
   }
 
-  function selectModes(choisi) {
-    var h = '<select name="mode">';
+  /** Ligne d'encaissement sous une cotisation : mode, référence, date */
+  function ligneEncaissement(l, colspan) {
+    var v = T.versement(l.id), mode = v.mode || ui.dernierMode;
+    return '<tr class="edition no-print"><td colspan="' + colspan + '"><form class="ligne-champs" data-form="encaisser" data-id="' + l.id + '">' +
+      '<div style="flex:1 1 100%"><strong>' + e(l.membre) + '</strong> · ' + fcfa(l.montant) + ' · échéance ' + l.echeance + '</div>' +
+      '<div style="flex:1 1 130px"><label>Mode</label>' + selectModes(mode) + '</div>' +
+      '<div style="flex:2 1 170px"><label>Référence (n° de transaction, reçu…)</label><input name="reference" value="' + e(v.reference || '') +
+      '" placeholder="facultatif en espèces" autocomplete="off"></div>' +
+      '<div style="flex:1 1 140px"><label>Date</label><input type="date" name="date" value="' + e(v.date_paiement || aujourdhuiIso()) + '"></div>' +
+      '<div class="fixe" style="display:flex;gap:6px"><button class="btn plein">✔ Encaisser</button><button type="button" class="btn" data-action="fermer-encaisser">Annuler</button></div>' +
+      '</form></td></tr>';
+  }
+
+  /** Détail d'une cotisation payée : reçu, envoi WhatsApp, correction, annulation */
+  function ligneDetailPaiement(l, colspan) {
+    var v = T.versement(l.id), m = T.membre(v.membre_id);
+    var wa = 'https://wa.me/' + D.numeroWhatsApp(m.telephone) + '?text=' + encodeURIComponent(D.texteRecu(T, l.id));
+    return '<tr class="edition no-print"><td colspan="' + colspan + '"><div style="margin-bottom:8px">Payé le <strong>' + dateFr(v.date_paiement) + '</strong> · ' +
+      e(C.MODES[v.mode] || 'Espèces') + (v.reference ? ' · réf. <strong>' + e(v.reference) + '</strong>' : ' · sans référence') + '</div>' +
+      '<div style="display:flex;gap:6px;flex-wrap:wrap"><button class="btn petit" data-action="recu" data-id="' + l.id + '">🧾 Reçu</button>' +
+      '<a class="btn petit" target="_blank" rel="noopener" href="' + e(wa) + '">📤 WhatsApp</a>' +
+      '<button class="btn petit" data-action="corriger-paiement" data-id="' + l.id + '">Corriger</button>' +
+      '<button class="btn petit danger" data-action="annuler-paiement" data-id="' + l.id + '">Annuler le paiement</button></div></td></tr>';
+  }
+
+  function selectModes(choisi, id) {
+    var h = '<select name="mode"' + (id ? ' id="' + id + '"' : '') + '>';
     Object.keys(C.MODES).forEach(function (k) { h += '<option value="' + k + '"' + (k === choisi ? ' selected' : '') + '>' + e(C.MODES[k]) + '</option>'; });
     return h + '</select>';
   }
@@ -494,13 +615,14 @@
     if (type === 'REMISES') return COLONNES.remises;
     if (type === 'RECUS') return COLONNES.reception;
     if (type === 'NON_RECUS') return COLONNES.reception.filter(function (c) { return c[0] !== 'remise'; });
+    if (type === 'PAYES') return COLONNES.detail.slice(0, 6).concat([['mode_libelle', 'Mode'], ['reference', 'Référence'], ['date_paiement', 'Payé le'], ['montant', 'Montant', 'd', 'F']]);
     return COLONNES.detail;
   }
   function valeurCellule(l, col) {
     var v = l[col[0]];
     if (col[3] === 'F') return fcfa(v);
     if (col[3] === '%') return v + ' %';
-    if (col[0] === 'date_remise') return dateFr(v);
+    if (col[0] === 'date_remise' || col[0] === 'date_paiement') return dateFr(v);
     return e(v);
   }
 
@@ -556,6 +678,9 @@
       '<textarea name="tarifs" rows="3" style="width:100%;font:inherit;border:1px solid #c9d1cc;border-radius:8px;padding:9px 10px">' + e(T.d.parametres.tarifs.join(', ')) + '</textarea>' +
       '<div class="aide">Le lot vaut 10 fois le tarif. Un membre peut prendre 25, 50, 75 ou 100 % d\'une part. Chaque groupe garde son tarif.</div></div>' +
       '<div class="champ"><label>Tarif proposé par défaut</label><input name="mise" type="number" min="4" step="4" value="' + T.mise() + '"></div>' +
+      '<div class="champ"><label>Date limite de paiement : jour du mois (facultatif)</label><input name="jour_limite" type="number" min="1" max="31" value="' +
+      e(T.d.parametres.jour_limite || '') + '" placeholder="ex. 5">' +
+      '<div class="aide">Sert à classer chaque paiement « à temps » ou « en retard » (si le mois du tour 1 est renseigné). Sans jour fixe, la date de clôture du mois fait foi.</div></div>' +
       '<div class="champ"><label>Numéro du prochain groupe créé</label><input name="prochain" type="number" min="1" value="' + T.prochainNumero() + '">' +
       '<div class="aide">Ex. 109 : le prochain groupe sera G109, puis G110… Le numéro d\'un groupe se corrige aussi dans sa fiche.</div></div>' +
       '<div class="champ"><label>Responsables (une ligne par personne : Nom ; téléphone)</label>' +
@@ -565,9 +690,15 @@
       '<button class="btn plein">Enregistrer</button></div></form>' +
       '<div class="carte"><div class="carte-tete"><h3>Sauvegarde des données</h3></div><div class="carte-corps">' +
       '<p class="aide" style="margin-top:0">Les données restent dans ce navigateur, sur cet appareil. Exportez une sauvegarde après chaque séance et gardez-la sur une clé USB ou par e-mail.</p>' +
-      '<p>' + (der ? 'Dernière sauvegarde : ' + new Date(Number(der)).toLocaleString('fr-FR') : 'Aucune sauvegarde exportée.') + '</p>' +
-      '<div class="ligne-champs"><button class="btn plein fixe" data-action="exporter">Exporter (.json)</button>' +
+      '<p>' + (der ? 'Dernier envoi : <strong>' + new Date(Number(der)).toLocaleString('fr-FR') + '</strong>' : '<strong style="color:var(--rouge)">Aucune sauvegarde envoyée.</strong>') +
+      ' · ' + modifsDepuisEnvoi() + ' modification(s) depuis.</p>' +
+      '<div class="ligne-champs"><button class="btn plein fixe" data-action="envoyer-sauvegarde">📤 Envoyer la sauvegarde</button>' +
+      '<button class="btn fixe" data-action="exporter">⬇ Télécharger (.json)</button>' +
       '<label class="btn fixe" style="margin:0;color:var(--vert)">Importer une sauvegarde<input type="file" id="import" accept=".json,application/json" hidden></label></div>' +
+      '<p class="aide" id="taille-donnees"></p>' +
+      '<h3 style="margin:14px 0 6px">Copies automatiques dans l\'appareil</h3>' +
+      '<p class="aide" style="margin-top:0">Une copie est faite chaque jour et avant chaque opération sensible (clôture, tirage, import…). ' +
+      'Elles permettent de revenir en arrière après une erreur, mais restent sur ce téléphone.</p><ul class="liste" id="liste-copies"><li class="aide">Chargement…</li></ul>' +
       '</div><div class="carte-pied"><button class="btn" data-action="exemple">Charger des données d\'exemple</button>' +
       '<button class="btn danger" data-action="effacer">Tout effacer</button></div></div></div>' + carteInstallation();
   }
@@ -753,6 +884,25 @@
     }, 'image/png');
   }
 
+  function afficherCopies() {
+    var t = $('#taille-donnees');
+    if (t) {
+      var ko = Math.round(JSON.stringify(T.d).length / 1024);
+      t.textContent = 'Taille des données : ' + ko + ' Ko (la mémoire du navigateur en accepte environ 5 000 Ko).';
+    }
+    if (!window.TontineCopies) return;
+    TontineCopies.lister().then(function (liste) {
+      var ul = $('#liste-copies');
+      if (!ul) return;
+      ul.innerHTML = liste.length ? liste.map(function (c) {
+        return '<li style="align-items:center"><span><strong>' + new Date(c.date).toLocaleString('fr-FR').slice(0, 16) + '</strong> — ' + e(c.raison) +
+          '<br><span class="aide">' + e(c.resume) + '</span></span><span style="display:flex;gap:4px">' +
+          '<button class="btn petit" data-action="restaurer-copie" data-id="' + c.id + '">Restaurer</button>' +
+          '<button class="btn petit" data-action="telecharger-copie" data-id="' + c.id + '" title="Télécharger">⬇</button></span></li>';
+      }).join('') : '<li class="aide">Aucune copie pour le moment.</li>';
+    });
+  }
+
   /** Imprime un document (fiche, relevé) seul, sans le reste de la page */
   function imprimerDocument(html) {
     var z = $('#impression');
@@ -763,7 +913,144 @@
     setTimeout(function () { window.print(); }, 50);
   }
 
-  var VUES = { tableau: vueTableau, membres: vueMembres, groupes: vueGroupes, paiements: vuePaiements, rapports: vueRapports, affiches: vueAffiches, parametres: vueParametres };
+  /* =================================================================
+   *  VUE 8 : DOSSIER COMPLET D'UN MEMBRE
+   * ================================================================= */
+  var COUL_PONCT = { A_TEMPS: ['var(--vert-clair)', 'var(--vert)'], RETARD: ['var(--ambre)', '#7a5b00'], EN_RETARD: ['var(--rouge-clair)', 'var(--rouge)'], A_PAYER: ['#eef1ef', '#4f5852'] };
+  function badgePonct(pc) {
+    var c = COUL_PONCT[pc.code];
+    return '<span class="badge" style="background:' + c[0] + ';color:' + c[1] + '">' + e(pc.texte) + '</span>';
+  }
+  function optionsDe(obj, choisi, vide) {
+    var h = vide ? '<option value="">' + vide + '</option>' : '';
+    Object.keys(obj).forEach(function (k) { h += '<option value="' + k + '"' + (k === choisi ? ' selected' : '') + '>' + e(obj[k]) + '</option>'; });
+    return h;
+  }
+
+  function vueDossier() {
+    var membres = T.listeMembres('');
+    var h = '<h2>Dossier d\'un membre</h2>';
+    if (!membres.length) return h + '<div class="alerte">Aucun membre inscrit.</div>';
+    if (!T.membre(ui.dossier)) ui.dossier = ui.membreVu && T.membre(ui.membreVu) ? ui.membreVu : membres[0].id;
+    h += '<div class="ligne-champs no-print" style="margin-bottom:14px"><div style="flex:1 1 260px"><label>Choisir un membre</label><select id="dossier-membre">' +
+      membres.map(function (m) {
+        return '<option value="' + m.id + '"' + (m.id === ui.dossier ? ' selected' : '') + '>' + e(m.nom + ' ' + m.prenom + ' · ' + m.telephone + ' · ' + LIB_STATUT_M[m.statut]) + '</option>';
+      }).join('') + '</select></div></div>';
+
+    var d = T.dossierMembre(ui.dossier), m = d.membre, t = d.suivi.total, pc = d.ponctualite;
+    var impayes = d.paiements.filter(function (x) { return x.statut === 'IMPAYE'; });
+    var echus = impayes.filter(function (x) { return x.ponctualite.code === 'EN_RETARD'; });
+
+    // en-tête
+    h += '<div class="carte"><div class="carte-tete"><div><h3 style="display:inline">' + e(m.prenom + ' ' + m.nom) + '</h3> ' +
+      '<span class="badge ' + BADGE_STATUT[d.statut] + '">' + e(d.statut_libelle) + '</span>' + badgeConfiance(m.confiance) +
+      '<div class="aide">N° ' + m.id + ' · inscrit le ' + dateFr(m.date_inscription) + ' · tél. ' + lienTel(m.telephone) + (m.telephone2 ? ' · ' + lienTel(m.telephone2) : '') +
+      (m.cni ? ' · CNI ' + e(m.cni) : '') + '</div></div><div class="no-print" style="display:flex;gap:6px;flex-wrap:wrap">' +
+      '<button class="btn petit" data-action="modifier-depuis-dossier" data-id="' + m.id + '">Modifier la fiche</button>' +
+      '<button class="btn petit" data-action="releve" data-id="' + m.id + '">🖨 Relevé</button>' +
+      (echus.length ? '<button class="btn petit danger" data-action="rappel-global" data-id="' + m.id + '">📣 Rappel (' + echus.length + ' retard(s))</button>' : '') +
+      '</div></div><div class="carte-corps"><div class="suivi" style="margin-top:0">' +
+      '<div><span>Parts</span><strong>' + t.nb_parts + '</strong><small>' + t.groupes + ' groupe(s), en cours et passés</small></div>' +
+      '<div><span>Participation</span><strong>' + t.engagement_pct + ' %</strong><small>' + fcfa(t.cotisation_mensuelle) + ' / mois</small></div>' +
+      '<div><span>Versé / dû</span><strong>' + fcfa(t.verse) + '</strong><small>sur ' + fcfa(t.du_a_ce_jour) + (t.taux !== null ? ' · ' + t.taux + ' %' : '') + '</small></div>' +
+      '<div><span>Ponctualité</span><strong>' + (pc.taux_a_temps === null ? '—' : pc.taux_a_temps + ' %') + '</strong><small>' + pc.a_temps + ' à temps · ' + pc.en_retard_payes + ' en retard</small></div>' +
+      '<div><span>Retards en cours</span><strong' + (pc.impayes ? ' style="color:var(--rouge)"' : '') + '>' + pc.impayes + '</strong><small>' + fcfa(t.montant_retards) + ' · ' + pc.rappels + ' rappel(s)</small></div>' +
+      '<div><span>Lots</span><strong>' + fcfa(t.lots_recus) + '</strong><small>reçus sur ' + fcfa(t.lots_prevus) + '</small></div></div>' +
+      '<div class="ligne-champs no-print" style="max-width:420px"><div><label>Niveau de confiance</label><select id="confiance-membre">' +
+      optionsDe(C.CONFIANCE, m.confiance, '— non évalué —') + '</select></div></div></div></div>';
+
+    // participations
+    h += '<div class="carte"><div class="carte-tete"><h3>Participations (en cours et passées)</h3></div><div class="tableau-wrap"><table><thead><tr>' +
+      '<th>Groupe</th><th>Statut</th><th class="d">Tarif</th><th class="c">Part</th><th>Tour</th><th class="d">Lot</th><th>Lot reçu</th></tr></thead><tbody>';
+    d.suivi.parts.forEach(function (p) {
+      h += '<tr><td><a href="#groupes" data-action="voir-groupe" data-id="' + p.groupe_id + '">' + e(p.code) + '</a>' + (p.nom_groupe ? '<br><span class="aide">' + e(p.nom_groupe) + '</span>' : '') +
+        '</td><td>' + badge(p.statut) + '</td><td class="d">' + fcfa(p.tarif) + '</td><td class="c">' + p.pct + ' %</td><td>' + p.tour + (p.mois ? '<br><span class="aide">' + e(p.mois) + '</span>' : '') +
+        '</td><td class="d">' + fcfa(p.lot) + '</td><td>' + e(p.etat_lot) + '</td></tr>';
+    });
+    if (!d.suivi.parts.length) h += '<tr><td colspan="7" class="vide">Aucune participation.</td></tr>';
+    h += '</tbody></table></div></div>';
+
+    // encaissement groupé
+    if (impayes.length) {
+      h += '<form class="carte no-print" data-form="encaisser-plusieurs"><div class="carte-tete"><h3>Encaisser en une fois</h3>' +
+        '<span class="aide">Un seul paiement (une seule référence) pour plusieurs cotisations, même dans des groupes différents</span></div><div class="carte-corps">' +
+        '<ul class="liste">' + impayes.map(function (x) {
+          return '<li><label style="display:flex;gap:8px;align-items:center;margin:0;color:inherit;font-size:inherit"><input type="checkbox" name="ids" value="' + x.id + '"' +
+            (x.ponctualite.code === 'EN_RETARD' ? ' checked' : '') + ' style="width:auto;min-height:0"> ' + e(x.groupe) + ' · échéance ' + x.echeance + (x.mois ? ' (' + e(x.mois) + ')' : '') +
+            '</label><span style="text-align:right"><strong>' + fcfa(x.montant) + '</strong><br>' + badgePonct(x.ponctualite) + '</span></li>';
+        }).join('') + '</ul>' +
+        '<div class="ligne-champs" style="margin-top:10px"><div style="flex:1 1 130px"><label>Mode</label>' + selectModes(ui.dernierMode) + '</div>' +
+        '<div style="flex:2 1 170px"><label>Référence unique</label><input name="reference" autocomplete="off" placeholder="n° de la transaction"></div>' +
+        '<div style="flex:1 1 140px"><label>Date</label><input type="date" name="date" value="' + aujourdhuiIso() + '"></div>' +
+        '<div class="fixe"><button class="btn plein">✔ Encaisser la sélection</button></div></div></div></form>';
+    }
+
+    // historique des paiements
+    h += '<div class="carte"><div class="carte-tete"><h3>Historique des paiements</h3><span class="aide">' + d.paiements.length + ' échéance(s)</span></div>' +
+      '<div class="tableau-wrap"><table><thead><tr><th>Groupe / échéance</th><th class="d">Montant</th><th>Situation</th><th class="mm">Paiement</th><th class="mm">Rappels</th><th class="no-print"></th></tr></thead><tbody>';
+    d.paiements.slice().reverse().forEach(function (x) {
+      h += '<tr><td>' + e(x.groupe) + ' · éch. ' + x.echeance + (x.mois ? '<br><span class="aide">' + e(x.mois) + '</span>' : '') +
+        (x.date_limite ? '<br><span class="aide">limite ' + dateFr(x.date_limite) + '</span>' : '') + '</td><td class="d">' + fcfa(x.montant) + '</td><td>' + badgePonct(x.ponctualite) + '</td>' +
+        '<td class="mm">' + (x.statut === 'PAYE' ? dateFr(x.date_paiement) + '<br><span class="aide">' + e(C.MODES[x.mode] || 'Espèces') + (x.reference ? ' · ' + e(x.reference) : '') + '</span>' : '—') + '</td>' +
+        '<td class="mm">' + (x.rappels.length ? x.rappels.map(function (r) { return r.niveau + (r.niveau === 1 ? 'er' : 'e') + ' : ' + dateFr(r.date); }).join('<br>') : '—') + '</td>' +
+        '<td class="no-print" style="white-space:nowrap">' + (x.statut === 'PAYE'
+          ? '<button class="btn petit" data-action="recu" data-id="' + x.id + '">🧾</button>'
+          : (x.ponctualite.code === 'EN_RETARD' ? '<button class="btn petit" data-action="rappel" data-id="' + x.id + '">📣 ' + (x.rappels.length + 1) + (x.rappels.length ? 'e' : 'er') + ' rappel</button>' : '')) +
+        '</td></tr>';
+    });
+    if (!d.paiements.length) h += '<tr><td colspan="6" class="vide">Aucune cotisation pour le moment.</td></tr>';
+    h += '</tbody></table></div></div>';
+
+    // observations
+    h += '<div class="carte"><div class="carte-tete"><h3>Observations</h3><span class="aide">Assiduité, confiance, comportement…</span></div><div class="carte-corps">' +
+      '<form class="ligne-champs no-print" data-form="observation" style="margin-bottom:10px">' +
+      '<div style="flex:1 1 130px"><label>Catégorie</label><select name="categorie">' + optionsDe(C.CATEGORIES_OBS, 'ASSIDUITE') + '</select></div>' +
+      '<div style="flex:1 1 110px"><label>Appréciation</label><select name="appreciation">' + optionsDe(C.APPRECIATIONS, 'NEUTRE') + '</select></div>' +
+      '<div style="flex:1 1 140px"><label>Date</label><input type="date" name="date" value="' + aujourdhuiIso() + '"></div>' +
+      '<div style="flex:3 1 100%"><label>Observation</label><input name="texte" required placeholder="ex. présent à toutes les réunions, paie toujours avant la date…"></div>' +
+      '<div class="fixe"><button class="btn plein">Ajouter</button></div></form><ul class="liste">';
+    var coulApp = { BON: 'var(--vert)', NEUTRE: 'var(--doux)', MAUVAIS: 'var(--rouge)' };
+    d.observations.forEach(function (o) {
+      h += '<li><span><strong style="color:' + coulApp[o.appreciation] + '">' + e(C.APPRECIATIONS[o.appreciation]) + '</strong> · ' + e(C.CATEGORIES_OBS[o.categorie]) +
+        ' · <span class="aide">' + dateFr(o.date) + '</span><br>' + e(o.texte) + '</span>' +
+        '<button class="lien-x no-print" data-action="supprimer-observation" data-id="' + o.id + '" title="Supprimer">×</button></li>';
+    });
+    if (!d.observations.length) h += '<li class="aide">Aucune observation.</li>';
+    h += '</ul></div></div>';
+
+    // réinscription
+    h += '<form class="carte no-print" data-form="attribuer-dossier"><div class="carte-tete"><h3>Réinscrire dans un groupe</h3>' +
+      '<span class="aide">Nouvelle souscription : son historique est conservé</span></div><div class="carte-corps">' + champsAttribution(false) +
+      '<button class="btn plein">Attribuer</button></div></form>';
+    return h;
+  }
+
+  /* ---------- rappels WhatsApp ---------- */
+  function texteRappel(ids) {
+    var lignes = ids.map(function (id) { return T.versement(id); });
+    var m = T.membre(lignes[0].membre_id), nomT = T.d.parametres.nom_tontine;
+    var niveau = Math.max.apply(null, ids.map(function (id) { return T.d.versements.find(function (x) { return x.id === id; }).rappels.length + 1; }));
+    var total = lignes.reduce(function (s, l) { return s + l.montant; }, 0);
+    var detail = lignes.map(function (l) { return '- groupe ' + l.groupe + ', échéance ' + l.echeance + (l.mois ? ' (' + l.mois + ')' : '') + ' : ' + fcfa(l.montant).replace('\u202f', ' '); }).join('\n');
+    var entete = niveau === 1 ? 'Bonjour ' + m.prenom + ', petit rappel amical de la tontine *' + nomT + '*.'
+      : niveau === 2 ? 'Bonjour ' + m.prenom + ', 2e rappel de la tontine *' + nomT + '*.'
+      : 'Bonjour ' + m.prenom + ', *dernier rappel* de la tontine *' + nomT + '*.';
+    var fin = niveau === 1 ? 'Merci de régulariser dès que possible.'
+      : niveau === 2 ? 'Cette cotisation reste impayée malgré notre premier rappel. Merci de régler rapidement.'
+      : 'Sans règlement très rapide, le bureau de la tontine sera informé. Merci de votre compréhension.';
+    return entete + '\nCotisation(s) non réglée(s) :\n' + detail + '\nTotal : ' + fcfa(total).replace('\u202f', ' ') + '\n' + fin;
+  }
+
+  function envoyerRappel(ids) {
+    var m = T.membre(T.versement(ids[0]).membre_id);
+    var url = 'https://wa.me/' + D.numeroWhatsApp(m.telephone) + '?text=' + encodeURIComponent(texteRappel(ids));
+    window.open(url, '_blank');
+    var niveaux = ids.map(function (id) { return T.ajouterRappel(id, 'WhatsApp'); });
+    toast('Rappel n° ' + Math.max.apply(null, niveaux) + ' noté pour ' + m.prenom + ' ' + m.nom + '.', 'succes');
+    rendre();
+  }
+
+  var VUES = { tableau: vueTableau, membres: vueMembres, dossier: vueDossier, groupes: vueGroupes, paiements: vuePaiements, rapports: vueRapports, affiches: vueAffiches, parametres: vueParametres };
 
   function vueCourante() { var v = location.hash.slice(1); return VUES[v] ? v : 'tableau'; }
 
@@ -772,6 +1059,7 @@
     $('#vue').innerHTML = VUES[v]();
     $$('form').forEach(function (f) { if (f.elements.formule && f.elements.tarif) majApercu(f); });
     if (v === 'affiches') majAffiche();
+    if (v === 'parametres') afficherCopies();
     $$('#nav a').forEach(function (a) { a.classList.toggle('actif', a.getAttribute('href') === '#' + v); });
     $('#nom-tontine').textContent = T.d.parametres.nom_tontine;
     $('#info-mise').textContent = 'Tarif par défaut : ' + fcfa(T.mise());
@@ -790,12 +1078,24 @@
     if (!el) return;
     var a = el.dataset.action, id = Number(el.dataset.id);
     switch (a) {
+      case 'ouvrir-dossier': ev.stopPropagation(); ui.dossier = id; aller('dossier'); break;
+      case 'filtre-membres': ui.filtreMembres = el.dataset.f; rendre(); break;
+      case 'export-membres': exporterMembres(); break;
+      case 'filtre-groupes': ui.filtreGroupes = el.dataset.f; rendre(); break;
+      case 'modifier-depuis-dossier': ui.membreVu = id; ui.editionMembre = true; aller('membres'); break;
+      case 'rappel': envoyerRappel([id]); break;
+      case 'rappel-global':
+        envoyerRappel(T.dossierMembre(id).paiements.filter(function (x) { return x.ponctualite.code === 'EN_RETARD'; }).map(function (x) { return x.id; }));
+        break;
+      case 'supprimer-observation':
+        if (confirm('Supprimer cette observation ?')) agir(function () { T.supprimerObservation(id); }, 'Observation supprimée.');
+        break;
       case 'voir-membre':
         if (ev.target.closest('button')) return;
         ui.membreVu = id; ui.editionMembre = false; rendre(); break;
       case 'supprimer-membre':
         ev.stopPropagation();
-        if (confirm('Supprimer définitivement ce membre ?')) agir(function () { T.supprimerMembre(id); if (ui.membreVu === id) ui.membreVu = null; }, 'Membre supprimé.');
+        if (confirm('Supprimer définitivement ce membre ?')) agir(function () { copie('Avant suppression d\'un membre'); T.supprimerMembre(id); if (ui.membreVu === id) ui.membreVu = null; }, 'Membre supprimé.');
         break;
       case 'editer-membre': ui.editionMembre = true; rendre(); break;
       case 'annuler-edition': ui.editionMembre = false; rendre(); break;
@@ -806,12 +1106,19 @@
       case 'affiche-groupe': ui.afType = 'groupe'; ui.afGroupe = id; ui.afTitre = ''; aller('affiches'); break;
       case 'affiche-telecharger': telechargerAffiche(); break;
       case 'affiche-partager': partagerAffiche(); break;
-      case 'regler':
-        agir(function () { T.marquer([id], 'PAYE'); }, 'Retard réglé.'); break;
+      case 'regler': ui.encaisser = id; ui.detailVers = null; rendre(); break;
+      case 'fermer-encaisser': ui.encaisser = null; rendre(); break;
+      case 'corriger-paiement': ui.encaisser = id; ui.detailVers = null; rendre(); break;
+      case 'annuler-paiement':
+        if (confirm('Annuler ce paiement ? La cotisation repassera « impayée ».')) {
+          agir(function () { T.marquer([id], 'IMPAYE'); ui.detailVers = null; }, 'Paiement annulé.');
+        }
+        break;
+      case 'recu': imprimerDocument(D.recuCotisation(T, id)); break;
       case 'editer-remise': ui.editionRemise = id; rendre(); break;
       case 'annuler-edition-remise': ui.editionRemise = null; rendre(); break;
       case 'annuler-remise':
-        if (confirm('Annuler cette remise ? Le lot repassera « à remettre ».')) agir(function () { T.annulerRemise(id); }, 'Remise annulée.');
+        if (confirm('Annuler cette remise ? Le lot repassera « à remettre ».')) agir(function () { copie('Avant annulation d\'une remise'); T.annulerRemise(id); }, 'Remise annulée.');
         break;
       case 'voir-groupe':
         ev.preventDefault(); ui.groupeId = id; aller('groupes'); break;
@@ -821,7 +1128,7 @@
         break;
       case 'demarrer':
         if (confirm('Démarrer ce groupe ? Plus aucune part ne pourra y être ajoutée. L\'échéance 1 sera ouverte.')) {
-          agir(function () { T.demarrerGroupe(id); }, 'Groupe démarré : l\'échéance 1 est ouverte dans Paiements.');
+          agir(function () { copie('Avant démarrage du groupe ' + T.groupe(id).code); T.demarrerGroupe(id); }, 'Groupe démarré : l\'échéance 1 est ouverte dans Paiements.');
         }
         break;
       case 'retirer-part':
@@ -830,11 +1137,17 @@
       case 'aller-paiements':
         ui.payGroupe = id; ui.payEch = null; aller('paiements'); break;
       case 'basculer':
-        agir(function () { T.marquer([id], el.dataset.statut === 'PAYE' ? 'IMPAYE' : 'PAYE'); }); break;
+        if (el.dataset.statut === 'PAYE') { ui.detailVers = ui.detailVers === id ? null : id; ui.encaisser = null; }
+        else { ui.encaisser = ui.encaisser === id ? null : id; ui.detailVers = null; }
+        rendre();
+        break;
       case 'marquer':
         var ids = $$('.case:checked').map(function (c) { return Number(c.value); });
         if (!ids.length) { toast('Cochez au moins une ligne.', 'erreur'); break; }
-        agir(function () { T.marquer(ids, el.dataset.statut); }, ids.length + ' ligne(s) marquée(s).');
+        var modeG = $('#mode-groupe') ? $('#mode-groupe').value : 'ESPECES';
+        if (el.dataset.statut === 'IMPAYE' && !confirm('Remettre ' + ids.length + ' cotisation(s) en « impayé » ?')) break;
+        if (el.dataset.statut === 'PAYE') ui.dernierMode = modeG;
+        agir(function () { T.marquer(ids, el.dataset.statut, { mode: modeG }); }, ids.length + ' ligne(s) marquée(s).');
         break;
       case 'cloturer':
         var s = T.situation(id);
@@ -843,28 +1156,44 @@
           ? 'Il reste ' + fcfa(s.restant) + ' à recouvrer sur l\'échéance ' + s.echeance + '.\nClôturer quand même ? Les impayés passeront en RETARDS.'
           : 'Échéance ' + s.echeance + ' entièrement payée. Clôturer et passer au tour suivant ?');
         if (confirm(msg)) {
-          agir(function () { ui.payEch = null; return T.cloturerEcheance(id); },
-               function (suiv) { return suiv > C.NB_POSITIONS ? 'Groupe terminé : les 10 tours sont levés.' : 'Échéance ' + suiv + ' ouverte.'; });
+          agir(function () { copie('Avant clôture : ' + T.groupe(id).code + ', échéance ' + T.groupe(id).tour_courant); ui.payEch = null; return T.cloturerEcheance(id); },
+               function (suiv) { return (suiv > C.NB_POSITIONS ? 'Groupe terminé : les 10 tours sont levés.' : 'Échéance ' + suiv + ' ouverte.') + '\nPensez à envoyer la sauvegarde (Paramètres).'; });
         }
         break;
       case 'installer': installer(); break;
       case 'export-csv': exporterCsv(); break;
       case 'imprimer': window.print(); break;
       case 'exporter':
-        telecharger(T.exporter(), 'tontine_sauvegarde_' + new Date().toISOString().slice(0, 10) + '.json', 'application/json');
-        try { localStorage.setItem(CLE_SAUVEGARDE, String(Date.now())); } catch (x) { /* ignore */ }
-        toast('Sauvegarde exportée.', 'succes'); rendre();
+        telecharger(T.exporter(), nomSauvegarde(), 'application/json');
+        marquerEnvoye();
+        toast('Sauvegarde téléchargée : envoyez ce fichier hors du téléphone (WhatsApp, e-mail, Drive).', 'succes'); rendre();
+        break;
+      case 'envoyer-sauvegarde': envoyerSauvegarde(); break;
+      case 'restaurer-copie':
+        if (!confirm('Revenir à l\'état de cette copie ?\n\nLes données actuelles sont d\'abord copiées : vous pourrez y revenir.')) break;
+        TontineCopies.lire(id).then(function (json) {
+          try {
+            var d = C.Tontine.valider(JSON.parse(json));
+            copie('Avant restauration d\'une copie');
+            T = new C.Tontine(d, enregistrer); enregistrer(T.d);
+            ui = Object.assign(ui, { membreVu: null, groupeId: null, payGroupe: null, payEch: null, encaisser: null, detailVers: null });
+            toast('Copie restaurée.', 'succes'); aller('tableau');
+          } catch (err) { toast('Copie illisible.', 'erreur'); }
+        });
+        break;
+      case 'telecharger-copie':
+        TontineCopies.lire(id).then(function (json) { if (json) telecharger(json, 'tontine_copie_' + id + '.json', 'application/json'); });
         break;
       case 'exemple':
         if (!T.d.membres.length || confirm('Remplacer toutes les données actuelles par des données d\'exemple ?')) {
-          T = new C.Tontine(donneesExemple(), enregistrer); enregistrer(T.d);
+          copie('Avant chargement de l\'exemple'); T = new C.Tontine(donneesExemple(), enregistrer); enregistrer(T.d);
           ui = Object.assign(ui, { membreVu: null, groupeId: null, payGroupe: null, payEch: null });
           toast('Données d\'exemple chargées.', 'succes'); aller('tableau');
         }
         break;
       case 'effacer':
         if (confirm('Effacer TOUTES les données de ce navigateur ? Cette action est définitive.') && confirm('Vraiment tout effacer ?')) {
-          T = new C.Tontine(C.etatVide(), enregistrer); enregistrer(T.d);
+          copie('Avant effacement complet'); T = new C.Tontine(C.etatVide(), enregistrer); enregistrer(T.d);
           ui = Object.assign(ui, { membreVu: null, groupeId: null, payGroupe: null, payEch: null });
           toast('Données effacées.', 'succes'); aller('tableau');
         }
@@ -880,6 +1209,35 @@
     var fiche = function () { return { nom: v('nom'), prenom: v('prenom'), telephone: v('telephone'), telephone2: v('telephone2'), cni: v('cni') }; };
     if (type === 'modifier-membre') {
       agir(function () { T.modifierMembre(ui.membreVu, fiche()); ui.editionMembre = false; }, 'Fiche mise à jour.');
+    } else if (type === 'encaisser') {
+      var idV = Number(f.dataset.id), ref = v('reference').trim();
+      if (v('mode') !== 'ESPECES' && !ref && !confirm('Aucune référence saisie pour un paiement ' + C.MODES[v('mode')] + '. Encaisser quand même ?')) return;
+      var deja = ref ? T.referenceUtilisee(ref, idV) : null;
+      if (deja && !confirm('Attention : la référence « ' + ref + ' » est déjà utilisée (' + deja + ').\n\nC\'est normal si un seul transfert paie plusieurs parts. Continuer ?')) return;
+      ui.dernierMode = v('mode');
+      agir(function () {
+        var avant = T.versement(idV).statut;
+        T.marquer([idV], 'PAYE', { mode: v('mode'), reference: ref, date: v('date') });
+        ui.encaisser = null; ui.detailVers = idV;
+        return avant;
+      }, function (avant) { return avant === 'PAYE' ? 'Paiement corrigé.' : 'Cotisation encaissée.'; });
+    } else if (type === 'encaisser-plusieurs') {
+      var idsE = $$('input[name="ids"]:checked', f).map(function (c) { return Number(c.value); });
+      if (!idsE.length) { toast('Cochez au moins une cotisation.', 'erreur'); return; }
+      var refE = v('reference').trim();
+      if (v('mode') !== 'ESPECES' && !refE && !confirm('Aucune référence pour un paiement ' + C.MODES[v('mode')] + '. Encaisser quand même ?')) return;
+      var dejaE = refE ? T.referenceUtilisee(refE, idsE) : null;
+      if (dejaE && !confirm('La référence « ' + refE + ' » est déjà utilisée (' + dejaE + '). Continuer ?')) return;
+      var totalE = idsE.reduce(function (s, id) { return s + T.versement(id).montant; }, 0);
+      if (!confirm('Encaisser ' + idsE.length + ' cotisation(s) pour un total de ' + fcfa(totalE) + (refE ? ', référence ' + refE : '') + ' ?')) return;
+      ui.dernierMode = v('mode');
+      agir(function () { T.marquer(idsE, 'PAYE', { mode: v('mode'), reference: refE, date: v('date') }); },
+           idsE.length + ' cotisation(s) encaissée(s) : ' + fcfa(totalE) + '.');
+    } else if (type === 'observation') {
+      agir(function () { T.ajouterObservation(ui.dossier, { categorie: v('categorie'), appreciation: v('appreciation'), date: v('date'), texte: v('texte') }); }, 'Observation ajoutée.');
+    } else if (type === 'attribuer-dossier') {
+      if (!tarifDuFormulaire(f)) { toast('Indiquez le tarif.', 'erreur'); return; }
+      agir(function () { return messagePlaces(T.attribuer(ui.dossier, v('formule'), tarifDuFormulaire(f))); }, function (msg) { return msg; });
     } else if (type === 'nouveau-groupe') {
       agir(function () { ui.groupeId = T.creerGroupe(tarifDuFormulaire(f)); }, 'Groupe créé.');
     } else if (type === 'infos-groupe') {
@@ -889,12 +1247,12 @@
       $$('select[name^="force_"]', f).forEach(function (s) { if (s.value) forces[s.name.slice(6)] = s.value; });
       var nbF = Object.keys(forces).length;
       if (confirm('Lancer le tirage au sort' + (nbF ? ' avec ' + nbF + ' place(s) imposée(s)' : '') + ' ?')) {
-        agir(function () { var d = T.tirageAuSort(ui.groupeId, null, forces); ui.tirage = false; return d; }, function (d) { return d; });
+        agir(function () { copie('Avant tirage au sort ' + T.groupe(ui.groupeId).code); var d = T.tirageAuSort(ui.groupeId, null, forces); ui.tirage = false; return d; }, function (d) { return d; });
       }
     } else if (type === 'remplacer') {
       var nouveau = T.membre(Number(v('membre')));
       if (nouveau && confirm('Céder cette part à ' + nouveau.nom + ' ' + nouveau.prenom + ' ?')) {
-        agir(function () { T.transfererPart(Number(v('part')), nouveau.id); }, 'Titulaire remplacé.');
+        agir(function () { copie('Avant remplacement d\'un titulaire'); T.transfererPart(Number(v('part')), nouveau.id); }, 'Titulaire remplacé.');
       }
     } else if (type === 'remise') {
       agir(function () {
@@ -921,6 +1279,7 @@
       agir(function () {
         T.setNom(v('nom')); T.setTarifs(v('tarifs')); T.setMise(v('mise'));
         T.setResponsables(v('responsables'));
+        T.setJourLimite(v('jour_limite'));
         if (Number(v('prochain')) !== T.prochainNumero()) T.setProchainNumero(v('prochain'));
       }, 'Paramètres enregistrés.');
     }
@@ -952,6 +1311,8 @@
     }
     if (ev.target.hasAttribute && ev.target.hasAttribute('data-apercu')) majApercu(ev.target.form);
     var id = ev.target.id;
+    if (id === 'dossier-membre') { ui.dossier = Number(ev.target.value); rendre(); return; }
+    if (id === 'confiance-membre') { agir(function () { T.setConfiance(ui.dossier, ev.target.value); }, 'Niveau de confiance enregistré.'); return; }
     if (id === 'pay-groupe') { ui.payGroupe = Number(ev.target.value); ui.payEch = null; rendre(); }
     else if (id === 'pay-ech') { ui.payEch = Number(ev.target.value); rendre(); }
     else if (id === 'rap-type') { ui.rapType = ev.target.value; rendre(); }
@@ -965,7 +1326,7 @@
         try {
           var d = C.Tontine.valider(JSON.parse(lecteur.result));
           if (!confirm('Remplacer les données actuelles par cette sauvegarde (' + d.membres.length + ' membres, ' + d.groupes.length + ' groupes) ?')) return;
-          T = new C.Tontine(d, enregistrer); enregistrer(T.d);
+          copie('Avant import d\'une sauvegarde'); T = new C.Tontine(d, enregistrer); enregistrer(T.d);
           ui = Object.assign(ui, { membreVu: null, groupeId: null, payGroupe: null, payEch: null });
           toast('Sauvegarde importée.', 'succes'); aller('tableau');
         } catch (err) {
@@ -976,6 +1337,13 @@
     }
   });
 
+  // copie de sécurité au premier lancement de la journée (avant toute modification)
+  try {
+    if (T.d.membres.length && localStorage.getItem(CLE_COPIE_JOUR) !== new Date().toISOString().slice(0, 10)) {
+      localStorage.setItem(CLE_COPIE_JOUR, new Date().toISOString().slice(0, 10));
+      copie('Copie automatique du jour');
+    }
+  } catch (x) { /* ignore */ }
   var bInst = $('#btn-installer');
   if (bInst) bInst.addEventListener('click', installer);
   rendre();

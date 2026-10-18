@@ -58,6 +58,47 @@
   }
 
   /* =================================================================
+   *  REÇU DE COTISATION (imprimable) et texte à envoyer par WhatsApp
+   * ================================================================= */
+  function recuCotisation(T, versementId) {
+    var v = T.versement(versementId), m = T.membre(v.membre_id), nomT = T.d.parametres.nom_tontine;
+    var resp = T.d.parametres.responsables || [];
+    var ligne = function (lib, val) { return '<tr><th>' + lib + '</th><td>' + val + '</td></tr>'; };
+    var bloc = function (titre) {
+      return '<section class="doc-fiche"><header><div><strong>' + e(nomT) + '</strong><br><span>' + e(v.nom_groupe || ('Groupe ' + v.groupe)) + '</span></div>' +
+        '<div class="doc-num">' + e(titre) + '<br>Reçu n° C' + String(v.id).padStart(5, '0') + '</div></header>' +
+        '<h1>REÇU DE COTISATION</h1><table class="doc-table">' +
+        ligne('Membre', '<strong>' + e(m.prenom + ' ' + m.nom) + '</strong> — tél. ' + e(m.telephone)) +
+        ligne('Groupe', e(v.groupe) + ' — part de ' + v.pct + ' %, tour n° ' + v.position) +
+        ligne('Échéance', 'N° ' + v.echeance + (v.mois ? ' — ' + e(v.mois) : '')) +
+        ligne('Montant', '<strong class="doc-montant">' + fcfa(v.montant) + '</strong>') +
+        ligne('En lettres', e(lettres(v.montant))) +
+        ligne('Mode', e(C.MODES[v.mode] || 'Espèces') + (v.reference ? ' — réf. <strong>' + e(v.reference) + '</strong>' : '')) +
+        ligne('Payé le', v.date_paiement ? dateFr(v.date_paiement) : '<span class="doc-blanc"></span>') +
+        '</table><div class="doc-signatures" style="grid-template-columns:1fr 1fr"><div>Le membre</div><div>Le responsable' +
+        (resp[0] ? '<br><small>' + e(resp[0].nom) + '</small>' : '') + '</div></div></section>';
+    };
+    return '<div class="doc">' + bloc('Exemplaire membre') + '<div class="doc-coupe">✂</div>' + bloc('Exemplaire tontine') + '</div>';
+  }
+
+  function texteRecu(T, versementId) {
+    var v = T.versement(versementId), m = T.membre(v.membre_id);
+    return '*' + T.d.parametres.nom_tontine + '* — Reçu de cotisation n° C' + String(v.id).padStart(5, '0') + '\n' +
+      'Membre : ' + m.prenom + ' ' + m.nom + '\n' +
+      'Groupe ' + v.groupe + (v.nom_groupe ? ' (' + v.nom_groupe + ')' : '') + ' — échéance ' + v.echeance + (v.mois ? ' (' + v.mois + ')' : '') + '\n' +
+      'Montant : ' + fcfa(v.montant).replace('\u202f', ' ') + ' — ' + (C.MODES[v.mode] || 'Espèces') + (v.reference ? ', réf. ' + v.reference : '') + '\n' +
+      'Payé le ' + dateFr(v.date_paiement) + '. Merci !';
+  }
+
+  /** Numéro au format international pour wa.me (Sénégal par défaut : 9 chiffres → 221…) */
+  function numeroWhatsApp(tel) {
+    var t = String(tel || '').replace(/\D/g, '');
+    if (t.length === 9) t = '221' + t;
+    if (t.indexOf('00') === 0) t = t.slice(2);
+    return t;
+  }
+
+  /* =================================================================
    *  RELEVÉ INDIVIDUEL D'UN MEMBRE
    * ================================================================= */
   function releveMembre(T, membreId) {
@@ -270,7 +311,7 @@
   }
 
   global.TontineDocs = {
-    ficheRemise: ficheRemise, releveMembre: releveMembre,
+    ficheRemise: ficheRemise, releveMembre: releveMembre, recuCotisation: recuCotisation, texteRecu: texteRecu, numeroWhatsApp: numeroWhatsApp,
     afficheGroupe: afficheGroupe, afficheTarifs: afficheTarifs, THEMES: THEMES, FORMATS: FORMATS
   };
 })(this);

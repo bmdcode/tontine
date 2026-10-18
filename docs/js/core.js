@@ -10,7 +10,7 @@
 
   var NB_POSITIONS = 10;   // strictement 10 tours par groupe
   var QUARTS_CASE = 4;     // une case pleine = 4 quarts = 100 %
-  var VERSION_DONNEES = 3;
+  var VERSION_DONNEES = 5;
 
   /* cle : identifiant ; parts : quarts de chaque part (1 = 25 %), chacune dans un groupe différent */
   var FORMULES = [
@@ -77,8 +77,8 @@
     return {
       version: VERSION_DONNEES,
       parametres: { mise_reference: 100000, nom_tontine: 'Ma Tontine', tarifs: TARIFS_DEFAUT.slice() },
-      seq: { membres: 0, groupes: 0, parts: 0, versements: 0, permutations: 0, remises: 0 },
-      membres: [], groupes: [], parts: [], versements: [], permutations: [], remises: []
+      seq: { membres: 0, groupes: 0, parts: 0, versements: 0, permutations: 0, remises: 0, observations: 0 },
+      membres: [], groupes: [], parts: [], versements: [], permutations: [], remises: [], observations: []
     };
   }
 
@@ -92,6 +92,16 @@
     });
     if (!Array.isArray(d.parametres.tarifs) || !d.parametres.tarifs.length) d.parametres.tarifs = TARIFS_DEFAUT.slice();
     if (!Array.isArray(d.parametres.responsables)) d.parametres.responsables = [];
+    d.versements.forEach(function (v) {
+      if (v.mode === undefined) v.mode = v.statut === 'PAYE' ? 'ESPECES' : null;
+      if (v.reference === undefined) v.reference = null;
+      if (!Array.isArray(v.rappels)) v.rappels = [];
+    });
+    if (!Array.isArray(d.observations)) d.observations = [];
+    if (typeof d.seq.observations !== 'number') d.seq.observations = d.observations.reduce(function (m, o) { return Math.max(m, o.id); }, 0);
+    d.membres.forEach(function (m) { if (m.confiance === undefined) m.confiance = null; });
+    d.groupes.forEach(function (g) { if (!g.clotures || typeof g.clotures !== 'object') g.clotures = {}; });
+    if (d.parametres.jour_limite === undefined) d.parametres.jour_limite = null;
     if (d.parametres.prochain_groupe === undefined) d.parametres.prochain_groupe = null;
     d.groupes.forEach(function (g) {
       if (g.nom === undefined) g.nom = '';
@@ -220,9 +230,16 @@
       })
       .map(function (m) {
         var parts = self.d.parts.filter(function (p) { return p.membre_id === m.id; });
+        var actives = parts.filter(function (p) { return self.groupe(p.groupe_id).statut !== 'CLOTURE'; });
         return Object.assign({}, m, {
-          nb_parts: parts.length,
-          engagement: parts.reduce(function (s, p) { return s + p.quarts; }, 0) * 25
+          nb_parts: actives.length, nb_parts_total: parts.length,
+          engagement: actives.reduce(function (s, p) { return s + p.quarts; }, 0) * 25,
+          statut: actives.length ? 'ACTIF' : (parts.length ? 'ANCIEN' : 'SANS_GROUPE'),
+          retards: self.d.versements.filter(function (v) {
+            if (v.statut !== 'IMPAYE') return false;
+            var p = self.d.parts.find(function (x) { return x.id === v.part_id; });
+            return p.membre_id === m.id && v.echeance < self.groupe(p.groupe_id).tour_courant;
+          }).length
         });
       })
       .sort(function (a, b) { return (a.nom + a.prenom).localeCompare(b.nom + b.prenom, 'fr'); });
@@ -568,7 +585,8 @@
     var g = this.groupe(p.groupe_id), m = this.membre(p.membre_id);
     return { id: v.id, groupe_id: g.id, groupe: g.code, echeance: v.echeance, position: p.position,
              membre: m.nom + ' ' + m.prenom, telephone: m.telephone, pct: p.quarts * 25,
-             montant: v.montant, statut: v.statut, date_paiement: v.date_paiement, _g: g };
+             montant: v.montant, statut: v.statut, date_paiement: v.date_paiement,
+             mode: v.mode || null, mode_libelle: v.mode ? MODES[v.mode] : '', reference: v.reference || '', _g: g };
   };
 
   function trierDetails(a, b) {
@@ -592,17 +610,55 @@
       .sort(trierDetails);
   };
 
-  Tontine.prototype.marquer = function (ids, statut) {
+  /** Marque des cotisations payées ou impayées.
+   *  info (facultatif, pour PAYE) : { mode, reference, date } — mode Espèces par défaut. */
+  Tontine.prototype.marquer = function (ids, statut, info) {
     if (['PAYE', 'IMPAYE'].indexOf(statut) < 0) throw new TontineError('Statut invalide.');
-    var date = statut === 'PAYE' ? aujourdhui() : null;
+    info = info || {};
+    var mode = MODES[info.mode] ? info.mode : null;
+    var reference = String(info.reference || '').trim() || null;
+    var date = String(info.date || '').slice(0, 10);
+    if (date && !/^\d{4}-\d{2}-\d{2}$/.test(date)) throw new TontineError('Date de paiement invalide.');
     this.d.versements.forEach(function (v) {
-      if (ids.indexOf(v.id) >= 0) {
-        if (statut === 'PAYE' && v.statut !== 'PAYE') v.date_paiement = date;
-        if (statut === 'IMPAYE') v.date_paiement = null;
-        v.statut = statut;
+      if (ids.indexOf(v.id) < 0) return;
+      if (statut === 'PAYE') {
+        if (v.statut !== 'PAYE' || date) v.date_paiement = date || v.date_paiement || aujourdhui();
+        if (mode || v.statut !== 'PAYE') v.mode = mode || v.mode || 'ESPECES';
+        if (info.reference !== undefined || v.statut !== 'PAYE') v.reference = reference;
+      } else {
+        v.date_paiement = null; v.mode = null; v.reference = null;
       }
+      v.statut = statut;
     });
     this._commit();
+  };
+
+  /** Une référence déjà utilisée pour une autre cotisation ou une remise (contrôle des doublons) */
+  Tontine.prototype.referenceUtilisee = function (reference, versementExclu) {
+    var ref = String(reference || '').trim().toUpperCase();
+    if (!ref) return null;
+    var self = this, exclus = [].concat(versementExclu || []);
+    var v = this.d.versements.find(function (x) { return exclus.indexOf(x.id) < 0 && x.reference && x.reference.toUpperCase() === ref; });
+    if (v) { var d = this._detailVersement(v); return d.membre + ' — groupe ' + d.groupe + ', échéance ' + d.echeance; }
+    var r = this.d.remises.find(function (x) { return x.reference && x.reference.toUpperCase() === ref; });
+    if (r) {
+      var p = this.d.parts.find(function (x) { return x.id === r.part_id; }), m = self.membre(p.membre_id);
+      return 'remise du lot à ' + m.nom + ' ' + m.prenom;
+    }
+    return null;
+  };
+
+  Tontine.prototype.versement = function (id) {
+    var v = this.d.versements.find(function (x) { return x.id === id; });
+    if (!v) return null;
+    var d = this._detailVersement(v), g = d._g;
+    delete d._g;
+    d.mode = v.mode || null; d.reference = v.reference || null;
+    d.mois = this.moisDuTour(g, v.echeance);
+    d.nom_groupe = g.nom;
+    var p = this.d.parts.find(function (x) { return x.id === v.part_id; });
+    d.membre_id = p.membre_id;
+    return d;
   };
 
   Tontine.prototype.situation = function (gid) {
@@ -617,6 +673,8 @@
     var g = this.groupe(gid);
     if (g.statut !== 'EN_COURS') throw new TontineError("Seul un groupe en cours peut avancer d'échéance.");
     var suivant = g.tour_courant + 1;
+    g.clotures = g.clotures || {};
+    g.clotures[g.tour_courant] = aujourdhui();
     if (suivant > NB_POSITIONS) {
       g.tour_courant = 11;
       g.statut = 'CLOTURE';
@@ -626,6 +684,113 @@
     }
     this._commit();
     return suivant;
+  };
+
+  /* ---------- statut, confiance, observations ---------- */
+  var STATUTS_MEMBRE = { ACTIF: 'Actif', ANCIEN: 'Inactif (ancien membre)', SANS_GROUPE: 'Sans groupe' };
+  var CONFIANCE = { BON: 'Bon payeur', MOYEN: 'Moyen', MAUVAIS: 'Mauvais payeur', SURVEILLER: 'À surveiller' };
+  var CATEGORIES_OBS = { ASSIDUITE: 'Assiduité', CONFIANCE: 'Confiance', COMPORTEMENT: 'Comportement', PAIEMENT: 'Paiement', AUTRE: 'Autre' };
+  var APPRECIATIONS = { BON: 'Bon', NEUTRE: 'Neutre', MAUVAIS: 'Mauvais' };
+
+  Tontine.prototype.setConfiance = function (membreId, niveau) {
+    var m = this.membre(membreId);
+    if (!m) throw new TontineError('Membre introuvable.');
+    m.confiance = CONFIANCE[niveau] ? niveau : null;
+    this._commit();
+  };
+
+  Tontine.prototype.ajouterObservation = function (membreId, info) {
+    if (!this.membre(membreId)) throw new TontineError('Membre introuvable.');
+    var texte = String(info.texte || '').trim();
+    if (!texte) throw new TontineError('Écrivez l\'observation.');
+    var date = String(info.date || '').slice(0, 10) || aujourdhui();
+    this.d.observations.push({ id: this._id('observations'), membre_id: membreId, date: date,
+      categorie: CATEGORIES_OBS[info.categorie] ? info.categorie : 'AUTRE',
+      appreciation: APPRECIATIONS[info.appreciation] ? info.appreciation : 'NEUTRE', texte: texte });
+    this._commit();
+  };
+
+  Tontine.prototype.supprimerObservation = function (id) {
+    this.d.observations = this.d.observations.filter(function (o) { return o.id !== id; });
+    this._commit();
+  };
+
+  Tontine.prototype.observations = function (membreId) {
+    return this.d.observations.filter(function (o) { return o.membre_id === membreId; })
+      .sort(function (a, b) { return b.date.localeCompare(a.date) || b.id - a.id; });
+  };
+
+  /* ---------- échéances : date limite et ponctualité ---------- */
+  Tontine.prototype.setJourLimite = function (jour) {
+    jour = parseInt(jour, 10);
+    this.d.parametres.jour_limite = jour >= 1 && jour <= 31 ? jour : null;
+    this._commit();
+  };
+
+  /** Date limite de paiement d'une échéance : jour fixe du mois (si réglé et si le mois du tour est connu), sinon date de clôture */
+  Tontine.prototype.dateLimite = function (g, ech) {
+    var j = this.d.parametres.jour_limite;
+    if (j && g.mois_debut) {
+      var a = parseInt(g.mois_debut.slice(0, 4), 10), m0 = parseInt(g.mois_debut.slice(5, 7), 10) - 1 + (ech - 1);
+      var an = a + Math.floor(m0 / 12), mo = m0 % 12, fin = new Date(an, mo + 1, 0).getDate();
+      return an + '-' + String(mo + 1).padStart(2, '0') + '-' + String(Math.min(j, fin)).padStart(2, '0');
+    }
+    return (g.clotures && g.clotures[ech]) || null;
+  };
+
+  function joursEntre(a, b) { return Math.round((Date.parse(b) - Date.parse(a)) / 86400000); }
+
+  /** { code, texte, jours } : A_TEMPS, RETARD (payé en retard), EN_RETARD (impayé, échéance dépassée), A_PAYER */
+  Tontine.prototype.ponctualite = function (v) {
+    var p = this.d.parts.find(function (x) { return x.id === v.part_id; }), g = this.groupe(p.groupe_id);
+    var lim = this.dateLimite(g, v.echeance);
+    if (v.statut === 'PAYE') {
+      if (!lim || !v.date_paiement) return { code: 'A_TEMPS', texte: 'Payé', jours: 0 };
+      var j = joursEntre(lim, v.date_paiement);
+      return j <= 0 ? { code: 'A_TEMPS', texte: j < 0 ? 'Payé en avance' : 'Payé à temps', jours: j }
+                    : { code: 'RETARD', texte: 'Payé avec ' + j + ' j de retard', jours: j };
+    }
+    var depasse = v.echeance < g.tour_courant || (lim && lim < aujourdhui());
+    if (!depasse) return { code: 'A_PAYER', texte: 'À payer' + (lim ? ' avant le ' + lim.split('-').reverse().join('/') : ''), jours: 0 };
+    var jr = lim ? Math.max(0, joursEntre(lim, aujourdhui())) : 0;
+    return { code: 'EN_RETARD', texte: 'En retard' + (jr ? ' depuis ' + jr + ' j' : ''), jours: jr };
+  };
+
+  /** Enregistre un rappel envoyé pour une cotisation ; renvoie son numéro (1er, 2e…) */
+  Tontine.prototype.ajouterRappel = function (versementId, canal) {
+    var v = this.d.versements.find(function (x) { return x.id === versementId; });
+    if (!v) throw new TontineError('Cotisation introuvable.');
+    v.rappels = v.rappels || [];
+    v.rappels.push({ date: aujourdhui(), niveau: v.rappels.length + 1, canal: canal || 'WhatsApp' });
+    this._commit();
+    return v.rappels.length;
+  };
+
+  /** Dossier complet : fiche, participations (en cours et passées), paiements détaillés, observations */
+  Tontine.prototype.dossierMembre = function (membreId) {
+    var self = this, m = this.membre(membreId);
+    if (!m) throw new TontineError('Membre introuvable.');
+    var suivi = this.suiviMembre(membreId);
+    var paiements = this.d.versements.filter(function (v) {
+      var p = self.d.parts.find(function (x) { return x.id === v.part_id; });
+      return p.membre_id === membreId;
+    }).map(function (v) {
+      var d = self.versement(v.id);
+      d.ponctualite = self.ponctualite(v);
+      d.rappels = (v.rappels || []).slice();
+      d.date_limite = self.dateLimite(self.groupe(d.groupe_id), v.echeance);
+      return d;
+    }).sort(function (a, b) { return a.groupe_id - b.groupe_id || a.echeance - b.echeance; });
+    var compte = function (code) { return paiements.filter(function (x) { return x.ponctualite.code === code; }).length; };
+    var payes = compte('A_TEMPS') + compte('RETARD');
+    var statut = suivi.parts.some(function (x) { return x.statut !== 'CLOTURE'; }) ? 'ACTIF' : (suivi.parts.length ? 'ANCIEN' : 'SANS_GROUPE');
+    return {
+      membre: m, statut: statut, statut_libelle: STATUTS_MEMBRE[statut], suivi: suivi, paiements: paiements,
+      observations: this.observations(membreId),
+      ponctualite: { a_temps: compte('A_TEMPS'), en_retard_payes: compte('RETARD'), impayes: compte('EN_RETARD'), a_payer: compte('A_PAYER'),
+                     taux_a_temps: payes ? Math.round(100 * compte('A_TEMPS') / payes) : null,
+                     rappels: paiements.reduce(function (s, x) { return s + x.rappels.length; }, 0) }
+    };
   };
 
   /* ---------- suivi individuel d'un membre ---------- */
@@ -802,7 +967,8 @@
   var api = {
     Tontine: Tontine, TontineError: TontineError, etatVide: etatVide,
     FORMULES: FORMULES, formule: formule, TARIFS_DEFAUT: TARIFS_DEFAUT, MOIS: MOIS,
-    RAPPORTS: RAPPORTS, MODES: MODES, melanger: melanger, nombreEnLettres: nombreEnLettres, NB_POSITIONS: NB_POSITIONS, QUARTS_CASE: QUARTS_CASE
+    RAPPORTS: RAPPORTS, MODES: MODES, STATUTS_MEMBRE: STATUTS_MEMBRE, CONFIANCE: CONFIANCE,
+    CATEGORIES_OBS: CATEGORIES_OBS, APPRECIATIONS: APPRECIATIONS, melanger: melanger, nombreEnLettres: nombreEnLettres, NB_POSITIONS: NB_POSITIONS, QUARTS_CASE: QUARTS_CASE
   };
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
   else global.TontineCore = api;

@@ -110,7 +110,19 @@ Requiert PHP 7.4 ou plus.
 >
 > **v4 (version HTML)** : formules « 75 % + 25 % » (2 groupes) et « 50 % + 25 % + 25 % » (3 groupes) ; suivi individuel de chaque membre (parts, taux de participation, versé / dû, retards, lots) avec relevé imprimable ; numérotation des groupes réglable (ex. à partir de G109) et numéro modifiable ; affiches PNG pour statut WhatsApp, publication Facebook ou format carré (tableau d'un groupe ou grille des tarifs, avec les responsables) à télécharger ou partager ; fiche de remise du lot à signer, en deux exemplaires, avec le montant en lettres.
 >
-> Les versions Python, PHP et Excel n'ont pas encore les ajouts v3 et v4.
+> **v5 (version HTML)** : mode de paiement et référence pour chaque cotisation (Espèces, Wave, Orange Money, Free Money, virement, chèque, autre), contrôle des références en double, reçu de cotisation imprimable et envoi du reçu par WhatsApp, correction et annulation d'un paiement ; copies de sécurité automatiques dans l'appareil (chaque jour et avant chaque opération sensible, 20 dernières conservées, restauration en un toucher), bouton « Envoyer la sauvegarde » vers WhatsApp / e-mail / Drive et rappel tant qu'elle n'est pas envoyée.
+>
+> **v6 (version HTML)** : onglet **Dossiers** — pour chaque membre, participations en cours et passées, historique de toutes ses cotisations avec ponctualité (payé en avance, à temps, avec X jours de retard, en retard), rappels envoyés (1er, 2e, dernier) par WhatsApp et journalisés, observations datées (assiduité, confiance, comportement, paiement) et niveau de confiance, réinscription dans un nouveau groupe ; encaissement de plusieurs cotisations (même dans des groupes différents) avec une seule référence ; date limite de paiement réglable ; membres actifs / inactifs / sans groupe et groupes clôturés en archives, export CSV de la liste des membres.
+>
+> Les versions Python, PHP et Excel n'ont pas encore les ajouts v3 à v6.
+
+### Sécurité des données (version HTML)
+
+- Les données restent **sur l'appareil** (mémoire du navigateur) ; rien n'est envoyé sur internet.
+- **Copies automatiques** : chaque jour et avant chaque clôture, tirage, import, remplacement ou effacement. Elles protègent contre une erreur de manipulation, pas contre la perte du téléphone.
+- **Seule protection contre la perte, le vol ou la panne du téléphone** : *Paramètres > Envoyer la sauvegarde* après chaque séance, vers WhatsApp, e-mail ou Google Drive. Pour reprendre sur un autre appareil : *Importer une sauvegarde*.
+- Sur iPhone, installez l'application sur l'écran d'accueil : dans Safari seul, les données d'un site non visité pendant 7 jours peuvent être effacées.
+- Les références de paiement sont saisies à la main : l'application ne vérifie pas les transactions auprès de Wave ou d'Orange Money.
 
 Le dossier `docs/` contient une application complète en HTML + JavaScript, sans serveur ni dépendance externe : `index.html`, `css/style.css`, `js/core.js` (logique métier, identique aux autres versions) et `js/app.js` (interface).
 

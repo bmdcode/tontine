@@ -1,7 +1,7 @@
 /* Service worker : l'application fonctionne sans internet une fois installée.
  * Changez VERSION à chaque mise à jour publiée pour que les téléphones la reçoivent. */
-var VERSION = 'tontine-v4';
-var FICHIERS = ['./', './index.html', './css/style.css', './js/core.js', './js/documents.js', './js/app.js', './manifest.webmanifest',
+var VERSION = 'tontine-v6';
+var FICHIERS = ['./', './index.html', './css/style.css', './js/core.js', './js/documents.js', './js/copies.js', './js/app.js', './manifest.webmanifest',
                 './icons/favicon-32.png', './icons/icone-192.png', './icons/icone-512.png', './icons/icone-maskable-512.png', './icons/apple-touch-icon.png'];
 
 self.addEventListener('install', function (ev) {

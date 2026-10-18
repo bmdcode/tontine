@@ -75,6 +75,7 @@ h3 { font-size: 1rem; margin: 0; }
 
 .grille-2 { display: grid; grid-template-columns: minmax(280px, 360px) 1fr; gap: 18px; align-items: start; }
 .grille-2.egal { grid-template-columns: 1fr 1fr; }
+.grille-2 > *, .chiffres > * { min-width: 0; }
 @media (max-width: 860px) { .grille-2, .grille-2.egal { grid-template-columns: 1fr; } }
 
 /* ---------- formulaires ---------- */
@@ -222,3 +223,5 @@ tr.cliquable { cursor: pointer; }
   body.mode-document #impression { display: block; }
   @page { margin: 12mm; }
 }
+
+tr.edition td { background: #fffbea; border-bottom: 2px solid #f0dc95; }
